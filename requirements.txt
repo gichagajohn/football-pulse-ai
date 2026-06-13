@@ -1,0 +1,22 @@
+# ── Core HTTP & parsing ──────────────────────────────────
+requests==2.31.0
+feedparser==6.0.11
+beautifulsoup4==4.12.3
+lxml==5.1.0
+tenacity==8.2.3
+
+# ── Scheduling ───────────────────────────────────────────
+APScheduler==3.10.4
+pytz==2024.1
+python-dateutil==2.8.2
+
+# ── Image generation ─────────────────────────────────────
+Pillow==10.2.0
+imagehash==4.3.1
+
+# ── Database ─────────────────────────────────────────────
+# SQLite is built into Python — no install needed
+
+# ── Config & utilities ───────────────────────────────────
+python-dotenv==1.0.1
+colorlog==6.8.2
