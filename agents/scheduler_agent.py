@@ -221,7 +221,7 @@ def update_standings():
         pts    = standings[0]["points"] if standings else 0
         cap    = caption_agent.generate_league_table_caption(comp_name, leader, pts)
 
-        db_id = publisher_agent.create_post_record(0, poster_path, cap)
+        db_id = publisher_agent.create_post_record(None, poster_path, cap)
         publisher_agent.publish(poster_path, cap, post_id_db=db_id)
         decision_agent.record_post(comp_code, "LEAGUE_TABLE", None, None, cap, str(poster_path))
 
@@ -265,7 +265,7 @@ def post_todays_fixtures():
         poster_path = poster_agent.create_todays_fixtures(fixtures)
         cap = f"📅 TODAY'S FOOTBALL FIXTURES\n\nHere's what's on today!\n\n#Football #TodaysFixtures #FootballPulse"
 
-        db_id = publisher_agent.create_post_record(0, poster_path, cap)
+        db_id = publisher_agent.create_post_record(None, poster_path, cap)
         publisher_agent.publish(poster_path, cap, post_id_db=db_id)
         decision_agent.record_post(today_key, "TODAYS_FIXTURES", None, None, cap, str(poster_path))
 
@@ -308,7 +308,7 @@ def post_football_fact():
         poster_path = poster_agent.create_football_fact(fact)
         cap = caption_agent.generate_fact_caption(fact)
 
-        db_id = publisher_agent.create_post_record(0, poster_path, cap)
+        db_id = publisher_agent.create_post_record(None, poster_path, cap)
         publisher_agent.publish(poster_path, cap, post_id_db=db_id)
         decision_agent.record_post(fact_key, "FOOTBALL_FACT", None, None, cap, str(poster_path))
 
@@ -344,7 +344,7 @@ def post_on_this_day():
         poster_path = poster_agent.create_football_fact(fact, category="ON THIS DAY", emoji="📅")
         cap = f"📅 ON THIS DAY IN FOOTBALL\n\n{fact}\n\n#OnThisDay #FootballHistory #FootballPulse"
 
-        db_id = publisher_agent.create_post_record(0, poster_path, cap)
+        db_id = publisher_agent.create_post_record(None, poster_path, cap)
         publisher_agent.publish(poster_path, cap, post_id_db=db_id)
         decision_agent.record_post(key, "ON_THIS_DAY", None, None, cap, str(poster_path))
 
