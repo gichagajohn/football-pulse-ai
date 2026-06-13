@@ -118,7 +118,7 @@ def _handle_goal(match: dict, scoring_team: str):
                 away_team=match["away_team"], home_score=home,
                 away_score=away, minute=minute,
                 match_id=mid, priority=priority,
-            ) or 0,
+            ) or None,
             poster_path=poster_path,
             caption_text=cap,
         )
@@ -162,7 +162,7 @@ def _handle_fulltime(match: dict):
         )
 
         db_id = publisher_agent.create_post_record(
-            event_id=0, poster_path=poster_path, caption_text=cap,
+            event_id=None, poster_path=poster_path, caption_text=cap,
         )
         publisher_agent.publish(poster_path, cap, post_id_db=db_id)
         decision_agent.record_post(mid, "FULLTIME", None, None, cap, str(poster_path))
