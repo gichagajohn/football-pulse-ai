@@ -608,7 +608,7 @@ def create_football_fact(
     _draw_divider(draw, 150, w)
 
     # Quotation mark decoration
-    draw.text((60, 180), "\u201c", font=_load_font(180, True), fill=(*C["accent_blue"], 80))
+    #draw.text((60, 180), "\u201c", font=_load_font(180, True), fill=(*C["accent_blue"], 80))
 
     # Wrap fact text
     lines = textwrap.wrap(fact_text, width=28)
@@ -617,7 +617,7 @@ def create_football_fact(
         draw.text((w // 2, text_y), line, font=font_sm, fill=C["text_primary"], anchor="mm")
         text_y += 52
 
-    draw.text((w - 60, text_y + 20), "\u201d", font=_load_font(180, True), fill=(*C["accent_blue"], 80), anchor="rm")
+    #draw.text((w - 60, text_y + 20), "\u201d", font=_load_font(180, True), fill=(*C["accent_blue"], 80), anchor="rm")
 
     _draw_divider(draw, h - 90, w)
     _draw_branding(draw, w, h - 50)
