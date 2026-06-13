@@ -1,0 +1,46 @@
+content = """name: Football Pulse AI Bot
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install fonts
+        run: sudo apt-get install -y fonts-dejavu-core
+
+      - name: Create .env file
+        run: |
+          echo "FOOTBALL_DATA_API_KEY=${{ secrets.FOOTBALL_DATA_API_KEY }}" >> .env
+          echo "FB_PAGE_ACCESS_TOKEN=${{ secrets.FB_PAGE_ACCESS_TOKEN }}" >> .env
+          echo "FB_PAGE_ID=${{ secrets.FB_PAGE_ID }}" >> .env
+          echo "GROK_API_KEY=${{ secrets.GROK_API_KEY }}" >> .env
+          echo "MIN_PRIORITY_TO_POST=50" >> .env
+          echo "MAX_POSTS_PER_HOUR=6" >> .env
+          echo "DEDUPE_WINDOW_HOURS=48" >> .env
+          echo "TIMEZONE=Africa/Nairobi" >> .env
+
+      - name: Run bot cycle
+        run: python run_once.py
+"""
+
+import os
+os.makedirs('.github/workflows', exist_ok=True)
+with open('.github/workflows/bot.yml', 'w') as f:
+    f.write(content)
+print('bot.yml created successfully!')
