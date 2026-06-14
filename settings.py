@@ -48,20 +48,19 @@ IG_USER_ID            = _env("IG_USER_ID", "")
 # ── Scheduling ─────────────────────────────────────────────────────────────
 LIVE_CHECK_INTERVAL       = _env("LIVE_CHECK_INTERVAL",       60,    int)
 STANDINGS_CHECK_INTERVAL  = _env("STANDINGS_CHECK_INTERVAL",  900,   int)
-FACTS_INTERVAL            = _env("FACTS_INTERVAL",            3600,  int)
-HISTORICAL_INTERVAL       = _env("HISTORICAL_INTERVAL",       21600, int)
+FACTS_INTERVAL            = _env("FACTS_INTERVAL",            1800,  int)
+HISTORICAL_INTERVAL       = _env("HISTORICAL_INTERVAL",       10800, int)
 
 # ── Content Policy ─────────────────────────────────────────────────────────
-MIN_PRIORITY_TO_POST = _env("MIN_PRIORITY_TO_POST", 50,  int)
-MAX_POSTS_PER_HOUR   = _env("MAX_POSTS_PER_HOUR",   6,   int)
-DEDUPE_WINDOW_HOURS  = _env("DEDUPE_WINDOW_HOURS",  48,  int)
+MIN_PRIORITY_TO_POST = _env("MIN_PRIORITY_TO_POST", 40,  int)
+MAX_POSTS_PER_HOUR   = _env("MAX_POSTS_PER_HOUR",   8,   int)
+DEDUPE_WINDOW_HOURS  = _env("DEDUPE_WINDOW_HOURS",  6,   int)
 
 # ── Logging ────────────────────────────────────────────────────────────────
 LOG_LEVEL   = _env("LOG_LEVEL", "INFO")
 TIMEZONE    = _env("TIMEZONE", "UTC")
 
 # ── Competition Priority Map ───────────────────────────────────────────────
-# Used by the Content Decision Agent
 COMPETITION_PRIORITY = {
     # FIFA / International
     "FIFA World Cup":              100,
@@ -102,8 +101,8 @@ DESIGN = {
 
 # ── RSS Feeds ─────────────────────────────────────────────────────────────
 RSS_FEEDS = [
-    "https://www.skysports.com/rss/12040",               # Sky Sports Football
-    "https://feeds.bbci.co.uk/sport/football/rss.xml",  # BBC Sport Football
-    "https://www.goal.com/feeds/en/news",                # Goal.com
-    "https://www.espn.com/espn/rss/soccer/news",         # ESPN Soccer
+    "https://www.skysports.com/rss/12040",
+    "https://feeds.bbci.co.uk/sport/football/rss.xml",
+    "https://www.goal.com/feeds/en/news",
+    "https://www.espn.com/espn/rss/soccer/news",
 ]

@@ -1,7 +1,6 @@
 """
 agents/scheduler_agent.py — Football Pulse AI
 Orchestrates all recurring jobs using APScheduler.
-This is the brain of the automation loop.
 """
 
 import json
@@ -27,15 +26,11 @@ logger = setup_logger("scheduler")
 
 TZ = pytz.timezone(settings.TIMEZONE)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 1: Live match monitoring (every 60 seconds)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_previous_scores: dict = {}   # match_id → (home_score, away_score, status)
+_previous_scores: dict = {}
 
 
 def check_live_matches():
-    logger.debug("Checking live matches…")
+    logger.debug("Checking live matches...")
     try:
         matches = data_agent.get_live_matches()
     except Exception as e:
@@ -52,12 +47,10 @@ def check_live_matches():
 
         prev = _previous_scores.get(mid)
 
-        # ── New goal detected ──────────────────────────────────────────────
         if prev and (home > prev[0] or away > prev[1]):
             scoring_team = match["home_team"] if home > prev[0] else match["away_team"]
             _handle_goal(match, scoring_team)
 
-        # ── Match just ended ───────────────────────────────────────────────
         if prev and prev[2] != "FINISHED" and status == "FINISHED":
             _handle_fulltime(match)
 
@@ -71,7 +64,6 @@ def _handle_goal(match: dict, scoring_team: str):
     away  = match["away_score"]
     minute = match.get("minute") or 0
 
-    # We don't have goal scorer from basic live endpoint — use team name
     scorer = scoring_team
     event_id = f"GOAL_{mid}_{home}_{away}"
 
@@ -80,14 +72,12 @@ def _handle_goal(match: dict, scoring_team: str):
 
     should, priority = decision_agent.should_post("GOAL", comp)
     if not should:
-        logger.info("Goal event below priority threshold (%d): %s", priority, event_id)
         return
 
     if not decision_agent.within_rate_limit():
         return
 
     try:
-        # Poster
         poster_path = poster_agent.create_goal_alert(
             home_team  = match["home_team"],
             away_team  = match["away_team"],
@@ -98,7 +88,6 @@ def _handle_goal(match: dict, scoring_team: str):
             competition= comp,
         )
 
-        # Caption
         cap = caption_agent.generate_goal_caption(
             scorer     = scorer,
             team       = scoring_team,
@@ -110,7 +99,6 @@ def _handle_goal(match: dict, scoring_team: str):
             competition= comp,
         )
 
-        # Store + publish
         db_id = publisher_agent.create_post_record(
             event_id=decision_agent.store_event(
                 event_id=event_id, event_type="GOAL",
@@ -171,11 +159,7 @@ def _handle_fulltime(match: dict):
         logger.exception("Full-time handling error: %s", e)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 2: Standings update (every 15 minutes)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_COMPETITIONS = ["PL", "PD", "BL1", "SA", "FL1"]
+_COMPETITIONS = ["PL", "PD", "BL1", "SA", "FL1", "WC", "CL"]
 _comp_idx = 0
 
 def update_standings():
@@ -211,8 +195,6 @@ def update_standings():
             for r in table_raw
         ]
 
-        # Only post league table once per day per competition
-        event_key = f"TABLE_{comp_code}_{datetime.now().strftime('%Y%m%d')}"
         if decision_agent.is_duplicate(comp_code, "LEAGUE_TABLE"):
             return
 
@@ -229,13 +211,15 @@ def update_standings():
         logger.exception("Standings update error: %s", e)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 3: Today's fixtures (once per day at 07:00)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def post_todays_fixtures():
-    logger.info("Generating today's fixtures post…")
+    logger.info("Generating today's fixtures post...")
     try:
+        # Only post fixtures once per day
+        today_key = datetime.now().strftime("%Y%m%d")
+        if decision_agent.is_duplicate(today_key, "TODAYS_FIXTURES"):
+            logger.info("Fixtures already posted today.")
+            return
+
         raw_fixtures = data_agent.get_todays_fixtures()
         if not raw_fixtures:
             logger.info("No fixtures today.")
@@ -258,12 +242,8 @@ def post_todays_fixtures():
                 "competition":  m["competition"],
             })
 
-        today_key = datetime.now().strftime("%Y%m%d")
-        if decision_agent.is_duplicate(today_key, "TODAYS_FIXTURES"):
-            return
-
         poster_path = poster_agent.create_todays_fixtures(fixtures)
-        cap = f"📅 TODAY'S FOOTBALL FIXTURES\n\nHere's what's on today!\n\n#Football #TodaysFixtures #FootballPulse"
+        cap = f"TODAY'S FOOTBALL FIXTURES\n\nHere's what's on today!\n\n#Football #TodaysFixtures #FootballPulse"
 
         db_id = publisher_agent.create_post_record(None, poster_path, cap)
         publisher_agent.publish(poster_path, cap, post_id_db=db_id)
@@ -273,55 +253,94 @@ def post_todays_fixtures():
         logger.exception("Today's fixtures error: %s", e)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 4: Football facts (every hour)
-# ─────────────────────────────────────────────────────────────────────────────
-
 FOOTBALL_FACTS = [
     "The fastest goal in Premier League history was scored by Shane Long in just 7.69 seconds against Watford in 2019.",
-    "Pelé scored his 1,000th goal in professional football on November 19, 1969.",
-    "The longest unbeaten run in English football history belongs to Arsenal's 'Invincibles' — 49 matches unbeaten (2003-2004).",
-    "Messi has won more Ballon d'Or awards than any other player in history — 8 times.",
+    "Pele scored his 1,000th goal in professional football on November 19, 1969.",
+    "The longest unbeaten run in English football belongs to Arsenal's Invincibles - 49 matches unbeaten (2003-2004).",
+    "Messi has won more Ballon d'Or awards than any other player in history - 8 times.",
     "The first ever FIFA World Cup was held in Uruguay in 1930. Uruguay won it.",
     "Ronaldo is the all-time top scorer in men's international football with over 130 goals.",
-    "Real Madrid has won the UEFA Champions League more than any other club — 14 times.",
+    "Real Madrid has won the UEFA Champions League more than any other club - 15 times.",
     "Liverpool's Steven Gerrard never won the Premier League despite 17 seasons at the club.",
-    "The most expensive transfer in football history is Neymar's move to PSG for €222 million in 2017.",
+    "The most expensive transfer in football history is Neymar's move to PSG for 222 million euros in 2017.",
     "Brazil is the only team to have played in every FIFA World Cup.",
     "The biggest recorded win in football history is Australia's 31-0 defeat of American Samoa in 2001.",
-    "Goalkeeper Dino Zoff won the World Cup at age 40 with Italy in 1982 — the oldest winner ever.",
+    "Goalkeeper Dino Zoff won the World Cup at age 40 with Italy in 1982 - the oldest winner ever.",
     "Manchester United won the treble in 1999 under Sir Alex Ferguson: Premier League, FA Cup, and Champions League.",
-    "The overhead kick was reportedly invented by Chilean player Ramón Unzaga in the 1910s.",
-    "The fastest red card in history was shown to Lee Todd of Cross Farm Park Celtic — just 2 seconds after kick-off.",
+    "The fastest red card in history was shown to Lee Todd just 2 seconds after kick-off.",
+    "Cristiano Ronaldo is the first player to score in 5 different FIFA World Cups.",
+    "Lionel Messi finally won the FIFA World Cup with Argentina in Qatar 2022.",
+    "The 2026 FIFA World Cup is the first to be hosted by 3 countries: USA, Canada, and Mexico.",
+    "Lev Yashin is the only goalkeeper to ever win the Ballon d'Or, in 1963.",
+    "The record attendance for a football match is 199,854 at the 1950 World Cup final in Brazil.",
+    "Bayern Munich once won the Bundesliga by 25 points in the 2012-13 season.",
+    "Pele is the only player to have won 3 FIFA World Cups (1958, 1962, 1970).",
+    "The Champions League anthem was composed by Tony Britten in 1992.",
+    "Manchester City won the Premier League with a record 100 points in the 2017-18 season.",
+    "Kylian Mbappe became the second teenager to score in a World Cup final in 2018.",
+    "Italy went unbeaten for 37 games before losing to Spain at Euro 2020.",
+    "The fastest hat-trick in Premier League history was scored by Sadio Mane in just 2 minutes 56 seconds.",
+    "The first World Cup to use VAR technology was Russia 2018.",
+    "Oliver Kahn is the only goalkeeper to win the Golden Ball at a FIFA World Cup (2002).",
+    "Arsenal went an entire Premier League season unbeaten in 2003-04, earning the nickname The Invincibles.",
+    "Gerd Muller scored 85 goals in just 62 games for West Germany.",
+    "The penalty shootout was introduced to the World Cup in 1978.",
+    "Roberto Carlos scored one of the greatest free kicks ever against France in 1997.",
+    "Zinedine Zidane won the World Cup, European Championship, Champions League, and Ballon d'Or.",
+    "FC Barcelona's La Masia academy produced Messi, Xavi, Iniesta, and Puyol all at the same time.",
+    "Ghana was the last African team to reach a World Cup quarter-final, in 2010.",
+    "Sweden's Zlatan Ibrahimovic never played in a FIFA World Cup despite a legendary club career.",
+    "The first football club in the world is Sheffield FC, founded in 1857.",
+    "Andres Iniesta scored the winning goal in the 2010 World Cup final for Spain.",
+    "Sir Alex Ferguson managed Manchester United for 26 years, winning 13 Premier League titles.",
+    "The ball used in the 1930 World Cup final was different in each half - one from each country.",
+    "N'Golo Kante won the World Cup with France and the Champions League with Chelsea in the same year.",
+    "Jurgen Klopp's Liverpool went 30 years without a league title before winning in 2020.",
+    "The highest scoring World Cup game ever was Austria 7-5 Switzerland in 1954.",
+    "Mohamed Salah is the fastest player to reach 100 Premier League goals.",
+    "The first women's FIFA World Cup was held in China in 1991. USA won it.",
+    "Erling Haaland scored 36 Premier League goals in his debut season - a new record.",
+    "Diego Maradona's Hand of God goal against England in 1986 is one of the most controversial moments in football.",
+    "France became World Champions in 1998 on home soil, beating Brazil 3-0 in the final.",
+    "Roger Milla became the oldest player to score at a World Cup at age 42 in 1994.",
+    "The term hat-trick originated in cricket but was adopted by football in the 1800s.",
+    "AC Milan and Inter Milan both play at the same stadium - the San Siro.",
+    "Thierry Henry is Arsenal's all-time top scorer with 228 goals.",
+    "Portugal's Eusebio scored 9 goals at the 1966 World Cup - a record that stood for decades.",
+    "The first penalty kick in World Cup history was scored in 1930.",
+    "Kevin De Bruyne is considered one of the greatest playmakers in Premier League history.",
+    "Vinicius Jr won the Ballon d'Or in 2024, becoming Brazil's first winner since Ronaldo in 1997.",
+    "The 2022 World Cup in Qatar was the first held in the Middle East.",
+    "Japan beat Germany and Spain at the 2022 World Cup in one of football's biggest upsets.",
+    "Morocco became the first African nation to reach the World Cup semi-finals in 2022.",
+    "Didier Drogba is Ivory Coast's greatest ever footballer and a Chelsea legend.",
+    "Liverpool's incredible comeback from 3-0 down to beat AC Milan in the 2005 Champions League final is known as the Miracle of Istanbul.",
 ]
 
 
 def post_football_fact():
-    logger.debug("Generating football fact post…")
+    logger.debug("Generating football fact post...")
     try:
-        fact = random.choice(FOOTBALL_FACTS)
-        fact_key = f"FACT_{hash(fact) % 99999}"
-
-        if decision_agent.is_duplicate(fact_key, "FOOTBALL_FACT"):
-            return
-
-        poster_path = poster_agent.create_football_fact(fact)
-        cap = caption_agent.generate_fact_caption(fact)
-
-        db_id = publisher_agent.create_post_record(None, poster_path, cap)
-        publisher_agent.publish(poster_path, cap, post_id_db=db_id)
-        decision_agent.record_post(fact_key, "FOOTBALL_FACT", None, None, cap, str(poster_path))
+        # Pick a random fact that hasn't been posted recently
+        random.shuffle(FOOTBALL_FACTS)
+        for fact in FOOTBALL_FACTS:
+            fact_key = f"FACT_{hash(fact) % 999999}"
+            if not decision_agent.is_duplicate(fact_key, "FOOTBALL_FACT"):
+                poster_path = poster_agent.create_football_fact(fact)
+                cap = caption_agent.generate_fact_caption(fact)
+                db_id = publisher_agent.create_post_record(None, poster_path, cap)
+                publisher_agent.publish(poster_path, cap, post_id_db=db_id)
+                decision_agent.record_post(fact_key, "FOOTBALL_FACT", None, None, cap, str(poster_path))
+                logger.info("Football fact posted successfully.")
+                return
+        logger.info("All facts recently posted, skipping.")
 
     except Exception as e:
         logger.exception("Football fact error: %s", e)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 5: On This Day historical (every 6 hours)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def post_on_this_day():
-    logger.debug("Generating On This Day post…")
+    logger.debug("Generating On This Day post...")
     try:
         now = datetime.now()
         events = data_agent.get_historical_fact_by_date(now.month, now.day)
@@ -335,14 +354,14 @@ def post_on_this_day():
         if not name:
             return
 
-        fact = f"On this day in {season}: {name} — {result}"
+        fact = f"On this day in {season}: {name} - {result}"
         key  = f"OTD_{now.strftime('%m%d')}_{hash(name) % 9999}"
 
         if decision_agent.is_duplicate(key, "ON_THIS_DAY"):
             return
 
-        poster_path = poster_agent.create_football_fact(fact, category="ON THIS DAY", emoji="📅")
-        cap = f"📅 ON THIS DAY IN FOOTBALL\n\n{fact}\n\n#OnThisDay #FootballHistory #FootballPulse"
+        poster_path = poster_agent.create_football_fact(fact, category="ON THIS DAY", emoji="")
+        cap = f"ON THIS DAY IN FOOTBALL\n\n{fact}\n\n#OnThisDay #FootballHistory #FootballPulse"
 
         db_id = publisher_agent.create_post_record(None, poster_path, cap)
         publisher_agent.publish(poster_path, cap, post_id_db=db_id)
@@ -352,12 +371,8 @@ def post_on_this_day():
         logger.exception("On This Day error: %s", e)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 6: Analytics refresh (every 30 minutes)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def refresh_analytics():
-    logger.debug("Refreshing engagement analytics…")
+    logger.debug("Refreshing engagement analytics...")
     try:
         analytics_agent.update_all_engagement()
         analytics_agent.log_summary()
@@ -365,39 +380,22 @@ def refresh_analytics():
         logger.warning("Analytics refresh error: %s", e)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Scheduler bootstrap
-# ─────────────────────────────────────────────────────────────────────────────
-
 def start():
     from database.schema import init_db
     init_db()
 
     scheduler = BlockingScheduler(timezone=TZ)
 
-    # Live scores — every 60 seconds
     scheduler.add_job(check_live_matches, IntervalTrigger(seconds=settings.LIVE_CHECK_INTERVAL), id="live_matches", max_instances=1, coalesce=True)
-
-    # Standings — every 15 minutes
     scheduler.add_job(update_standings, IntervalTrigger(seconds=settings.STANDINGS_CHECK_INTERVAL), id="standings", max_instances=1, coalesce=True)
-
-    # Fixtures — daily at 07:00 local
     scheduler.add_job(post_todays_fixtures, "cron", hour=7, minute=0, id="fixtures")
-
-    # Football facts — every hour
     scheduler.add_job(post_football_fact, IntervalTrigger(seconds=settings.FACTS_INTERVAL), id="facts", max_instances=1, coalesce=True)
-
-    # On this day — every 6 hours
     scheduler.add_job(post_on_this_day, IntervalTrigger(seconds=settings.HISTORICAL_INTERVAL), id="on_this_day", max_instances=1, coalesce=True)
-
-    # Analytics — every 30 minutes
     scheduler.add_job(refresh_analytics, IntervalTrigger(minutes=30), id="analytics", max_instances=1, coalesce=True)
-
-    # Injury / Transfer RSS scan — every 30 minutes
     scheduler.add_job(_scan_injury_transfer_news, IntervalTrigger(minutes=30), id="news_scan", max_instances=1, coalesce=True)
 
     logger.info("=" * 60)
-    logger.info("⚽  FOOTBALL PULSE AI — Scheduler started")
+    logger.info("FOOTBALL PULSE AI - Scheduler started")
     logger.info("=" * 60)
 
     try:
@@ -405,12 +403,6 @@ def start():
     except (KeyboardInterrupt, SystemExit):
         logger.info("Scheduler stopped.")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 7: Injury / Transfer RSS scan (every 30 minutes)
-# ─────────────────────────────────────────────────────────────────────────────
-# NOTE: This function is injected into the scheduler at startup
-# via _register_extra_jobs() called inside start()
 
 def _scan_injury_transfer_news():
     from agents.injury_transfer_agent import scan_for_news

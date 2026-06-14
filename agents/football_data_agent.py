@@ -1,7 +1,6 @@
 """
 agents/football_data_agent.py — Football Pulse AI
 Collects football data from Football-Data.org, TheSportsDB, and RSS feeds.
-All sources are free. No paid API required.
 """
 
 import json
@@ -15,14 +14,9 @@ from utils.http import get_json, session
 
 logger = setup_logger("data_agent")
 
-# ── API base URLs ──────────────────────────────────────────────────────────
-FD_BASE  = "https://api.football-data.org/v4"     # football-data.org
+FD_BASE  = "https://api.football-data.org/v4"
 SDB_BASE = "https://www.thesportsdb.com/api/v1/json"
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Football-Data.org helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _fd_headers() -> dict:
     return {"X-Auth-Token": settings.FOOTBALL_DATA_API_KEY}
@@ -30,7 +24,7 @@ def _fd_headers() -> dict:
 
 def get_live_matches() -> list[dict]:
     """Return matches currently in progress from football-data.org."""
-    data = get_json(f"{FD_BASE}/matches", params={"status": "LIVE"}, headers=_fd_headers())
+    data = get_json(f"{FD_BASE}/matches", params={"status": "IN_PLAY"}, headers=_fd_headers())
     if not data:
         return []
     matches = data.get("matches", [])
@@ -52,10 +46,6 @@ def get_todays_fixtures() -> list[dict]:
 
 
 def get_standings(competition_code: str) -> Optional[dict]:
-    """
-    Fetch league table for a competition.
-    competition_code examples: PL, PD, BL1, SA, FL1, CL, WC
-    """
     data = get_json(
         f"{FD_BASE}/competitions/{competition_code}/standings",
         headers=_fd_headers()
@@ -80,10 +70,6 @@ def get_top_scorers(competition_code: str, season: int = None) -> list[dict]:
 def get_match_detail(match_id: int) -> Optional[dict]:
     return get_json(f"{FD_BASE}/matches/{match_id}", headers=_fd_headers())
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TheSportsDB helpers  (free key = "1")
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _sdb(endpoint: str, params: dict = None):
     key = settings.THESPORTSDB_API_KEY
@@ -127,19 +113,13 @@ def get_next_5_matches(team_id: str) -> list[dict]:
 
 
 def get_historical_fact_by_date(month: int, day: int) -> list[dict]:
-    """On-this-day style facts from TheSportsDB."""
     data = _sdb(f"eventsonthisday.php?month={month}&day={day}&l=Soccer")
     if not data:
         return []
     return data.get("events", [])
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# RSS Feed parser
-# ─────────────────────────────────────────────────────────────────────────────
-
 def fetch_rss_news(max_items: int = 10) -> list[dict]:
-    """Pull latest headlines from all configured RSS feeds."""
     articles = []
     for url in settings.RSS_FEEDS:
         try:
@@ -158,13 +138,7 @@ def fetch_rss_news(max_items: int = 10) -> list[dict]:
     return articles
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Event Normalisation
-# Converts raw API payloads into a standard internal dict
-# ─────────────────────────────────────────────────────────────────────────────
-
 def normalise_match(raw: dict) -> dict:
-    """Flatten a football-data.org match dict into our standard schema."""
     competition = raw.get("competition", {})
     home = raw.get("homeTeam", {})
     away = raw.get("awayTeam", {})
