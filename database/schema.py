@@ -11,10 +11,6 @@ from settings import DB_PATH
 logger = logging.getLogger(__name__)
 
 DDL = """
--- ─────────────────────────────────────────────
--- Posts table (matches what publisher_agent.py writes)
--- ─────────────────────────────────────────────
-
 CREATE TABLE IF NOT EXISTS posts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id        INTEGER DEFAULT 0,
@@ -36,10 +32,6 @@ CREATE TABLE IF NOT EXISTS posts (
     published_at    DATETIME
 );
 
--- ─────────────────────────────────────────────
--- Events log
--- ─────────────────────────────────────────────
-
 CREATE TABLE IF NOT EXISTS events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     event_key   TEXT    NOT NULL UNIQUE,
@@ -49,20 +41,12 @@ CREATE TABLE IF NOT EXISTS events (
     created_at  DATETIME DEFAULT (datetime('now'))
 );
 
--- ─────────────────────────────────────────────
--- Post history (for duplicate detection)
--- ─────────────────────────────────────────────
-
 CREATE TABLE IF NOT EXISTS post_history (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     content_hash TEXT    NOT NULL,
     content_type TEXT,
     posted_at    DATETIME DEFAULT (datetime('now'))
 );
-
--- ─────────────────────────────────────────────
--- Live match state (persists across GitHub Actions runs)
--- ─────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS match_state (
     match_id    TEXT    PRIMARY KEY,
@@ -73,9 +57,28 @@ CREATE TABLE IF NOT EXISTS match_state (
 );
 """
 
+POSTS_COLUMNS = {
+    "event_id":      "INTEGER DEFAULT 0",
+    "poster_path":   "TEXT",
+    "caption_text":  "TEXT",
+    "hashtags":      "TEXT DEFAULT ''",
+    "platform":      "TEXT DEFAULT 'facebook'",
+    "status":        "TEXT DEFAULT 'pending'",
+    "content_hash":  "TEXT",
+    "content_type":  "TEXT",
+    "competition":   "TEXT",
+    "fb_post_id":    "TEXT",
+    "ig_post_id":    "TEXT",
+    "error_message": "TEXT",
+    "likes":         "INTEGER DEFAULT 0",
+    "comments":      "INTEGER DEFAULT 0",
+    "shares":        "INTEGER DEFAULT 0",
+    "posted_at":     "DATETIME DEFAULT (datetime('now'))",
+    "published_at":  "DATETIME",
+}
+
 
 def get_connection() -> sqlite3.Connection:
-    """Return a connection with DELETE journal mode (single .db file, git-friendly)."""
     db_path = Path(DB_PATH)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
@@ -85,8 +88,18 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add any missing columns to posts table — safe to run every startup."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(posts)").fetchall()}
+    for col, definition in POSTS_COLUMNS.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE posts ADD COLUMN {col} {definition}")
+            logger.info("Migration: added column posts.%s", col)
+
+
 def init_db() -> None:
-    """Create all tables if they don't already exist."""
+    """Create all tables and migrate any missing columns."""
     with get_connection() as conn:
         conn.executescript(DDL)
+        _migrate(conn)
     logger.info("Database initialised at %s", DB_PATH)
