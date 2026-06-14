@@ -254,7 +254,7 @@ def _engagement(event_type: str) -> str:
 def generate_with_gemini(prompt: str) -> Optional[str]:
     """
     Use Google Gemini free tier to generate captions if GEMINI_API_KEY is set.
-    Free tier model: gemini-1.5-flash
+    Free tier model: gemini-2.5-flash
     """
     gemini_key = getattr(settings, 'GEMINI_API_KEY', None) or __import__('os').getenv('GEMINI_API_KEY', '')
     if not gemini_key:
@@ -262,7 +262,7 @@ def generate_with_gemini(prompt: str) -> Optional[str]:
     try:
         import requests
         resp = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}",
             headers={"Content-Type": "application/json"},
             json={
                 "contents": [{
