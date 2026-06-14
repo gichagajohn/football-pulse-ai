@@ -36,15 +36,10 @@ INJURY_KEYWORDS = re.compile(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Player / club name extractor (simple heuristic)
+# Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_clubs(text: str) -> tuple[str, str]:
-    """
-    Very simple heuristic: look for "Club A to Club B" or "from Club A".
-    Returns (from_club, to_club) or ("Unknown", "Unknown").
-    """
-    # Pattern: "X to Y" or "X joins Y"
     m = re.search(r"(\w[\w\s]+?)\s+(?:to|joins?)\s+([\w\s]+?)(?:\s+for|\s+on|\.|,|$)", text, re.IGNORECASE)
     if m:
         return m.group(1).strip(), m.group(2).strip()
@@ -52,7 +47,6 @@ def _extract_clubs(text: str) -> tuple[str, str]:
 
 
 def _extract_fee(text: str) -> str:
-    """Extract fee string like '€50m', '£30 million', 'free transfer'."""
     m = re.search(
         r"(free transfer|undisclosed|[€£$]\s*\d+[\d,.]*\s*(?:m(?:illion)?|bn|k)?|\d+\s*million)",
         text, re.IGNORECASE
@@ -71,7 +65,7 @@ def _article_hash(url: str) -> str:
 def scan_for_news():
     """
     Pull all RSS feeds, detect transfer/injury articles, generate posts.
-    Called by the scheduler every 30 minutes.
+    Called by run_once.py every 15 minutes via GitHub Actions.
     """
     logger.debug("Scanning RSS feeds for transfer/injury news…")
     processed = 0
@@ -88,22 +82,21 @@ def scan_for_news():
             summary = entry.get("summary", "")
             link    = entry.get("link", "")
             text    = f"{title} {summary}"
-
             art_id  = _article_hash(link)
 
             # Skip if already processed
-            if decision.is_duplicate(art_id, "RSS_ARTICLE"):
+            if decision.is_duplicate("RSS_ARTICLE", art_id):
                 continue
 
-            # ── Transfer detection ─────────────────────────────────────
+            # ── Transfer detection ──────────────────────────────────────
             if TRANSFER_KEYWORDS.search(text):
                 logger.info("Transfer article detected: %s", title[:80])
-                should, priority = decision.should_post("TRANSFER_ALERT", "default")
-                if should and decision.within_rate_limit():
+
+                # should_post returns a single bool — fixed
+                if decision.should_post("TRANSFER_ALERT", "default", dedup_key=art_id):
                     from_club, to_club = _extract_clubs(text)
                     fee = _extract_fee(text)
 
-                    # Use headline as player name heuristic (first capitalized words)
                     player_match = re.match(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})", title)
                     player = player_match.group(1) if player_match else title[:30]
 
@@ -116,19 +109,19 @@ def scan_for_news():
                         )
                         cap = caption_agent.generate_transfer_caption(player, from_club, to_club, fee)
                         db_id = publisher_agent.create_post_record(0, poster_path, cap)
-                        publisher_agent.publish(poster_path, cap, post_id_db=db_id)
+                        fb_id = publisher_agent.publish(poster_path, cap, post_id_db=db_id)
+                        decision.record_post("TRANSFER_ALERT", art_id, "default", fb_id)
                         processed += 1
                     except Exception as e:
                         logger.error("Transfer post failed: %s", e)
-
-                decision.record_post(art_id, "RSS_ARTICLE")
                 continue
 
             # ── Injury detection ────────────────────────────────────────
             if INJURY_KEYWORDS.search(text):
                 logger.info("Injury article detected: %s", title[:80])
-                should, priority = decision.should_post("INJURY_UPDATE", "default")
-                if should and decision.within_rate_limit():
+
+                # should_post returns a single bool — fixed
+                if decision.should_post("INJURY_ALERT", "default", dedup_key=art_id):
                     try:
                         fact_text = title[:120]
                         poster_path = poster.create_football_fact(
@@ -140,12 +133,11 @@ def scan_for_news():
                             f"#InjuryNews #Football #FootballPulse"
                         )
                         db_id = publisher_agent.create_post_record(0, poster_path, cap)
-                        publisher_agent.publish(poster_path, cap, post_id_db=db_id)
+                        fb_id = publisher_agent.publish(poster_path, cap, post_id_db=db_id)
+                        decision.record_post("INJURY_ALERT", art_id, "default", fb_id)
                         processed += 1
                     except Exception as e:
                         logger.error("Injury post failed: %s", e)
-
-                decision.record_post(art_id, "RSS_ARTICLE")
 
     logger.info("News scan complete. %d posts generated.", processed)
     return processed

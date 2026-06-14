@@ -17,10 +17,7 @@ FB_GRAPH = "https://graph.facebook.com/v19.0"
 
 
 def fetch_post_insights(fb_post_id: str) -> Optional[dict]:
-    """
-    Fetch likes, comments, shares, reach, impressions for a FB post.
-    Returns dict or None.
-    """
+    """Fetch likes, comments, shares for a FB post. Returns dict or None."""
     if not settings.FB_PAGE_ACCESS_TOKEN:
         return None
 
@@ -36,19 +33,18 @@ def fetch_post_insights(fb_post_id: str) -> Optional[dict]:
         return None
 
     return {
-        "likes":      data.get("reactions", {}).get("summary", {}).get("total_count", 0),
-        "comments":   data.get("comments",  {}).get("summary", {}).get("total_count", 0),
-        "shares":     data.get("shares",    {}).get("count", 0),
-        "reach":      0,   # requires Page Insights permission
-        "impressions": 0,
+        "likes":    data.get("reactions", {}).get("summary", {}).get("total_count", 0),
+        "comments": data.get("comments",  {}).get("summary", {}).get("total_count", 0),
+        "shares":   data.get("shares",    {}).get("count", 0),
     }
 
 
 def update_all_engagement():
     """Pull engagement for all published posts and update the DB."""
     with get_connection() as conn:
+        # Fixed: posts table has no 'status' column — just filter by fb_post_id not null
         rows = conn.execute(
-            "SELECT id, fb_post_id FROM posts WHERE status='published' AND fb_post_id IS NOT NULL"
+            "SELECT id, fb_post_id FROM posts WHERE fb_post_id IS NOT NULL"
         ).fetchall()
 
     updated = 0
@@ -58,42 +54,28 @@ def update_all_engagement():
             continue
 
         with get_connection() as conn:
-            # Upsert engagement record
-            existing = conn.execute(
-                "SELECT id FROM engagement WHERE post_id=?", (row["id"],)
-            ).fetchone()
-
-            if existing:
-                conn.execute(
-                    """UPDATE engagement SET likes=?, comments=?, shares=?, reach=?,
-                       impressions=?, fetched_at=? WHERE post_id=?""",
-                    (
-                        insights["likes"], insights["comments"], insights["shares"],
-                        insights["reach"], insights["impressions"],
-                        datetime.now(timezone.utc).isoformat(), row["id"]
-                    )
+            conn.execute(
+                """UPDATE posts SET likes=?, comments=?, shares=? WHERE id=?""",
+                (
+                    insights["likes"],
+                    insights["comments"],
+                    insights["shares"],
+                    row["id"],
                 )
-            else:
-                conn.execute(
-                    """INSERT INTO engagement(post_id, fb_post_id, platform, likes, comments, shares, reach, impressions)
-                       VALUES(?,?,?,?,?,?,?,?)""",
-                    (
-                        row["id"], row["fb_post_id"], "facebook",
-                        insights["likes"], insights["comments"], insights["shares"],
-                        insights["reach"], insights["impressions"],
-                    )
-                )
+            )
         updated += 1
 
     logger.info("Engagement updated for %d posts.", updated)
 
 
 def get_summary_stats() -> dict:
-    """Return aggregated stats for logging / dashboard."""
+    """Return aggregated stats for logging."""
     with get_connection() as conn:
-        total_posts = conn.execute("SELECT COUNT(*) FROM posts WHERE status='published'").fetchone()[0]
+        total_posts = conn.execute(
+            "SELECT COUNT(*) FROM posts WHERE fb_post_id IS NOT NULL"
+        ).fetchone()[0]
         totals = conn.execute(
-            "SELECT SUM(likes) as likes, SUM(comments) as comments, SUM(shares) as shares FROM engagement"
+            "SELECT SUM(likes) as likes, SUM(comments) as comments, SUM(shares) as shares FROM posts"
         ).fetchone()
 
     return {
