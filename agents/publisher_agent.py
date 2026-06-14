@@ -29,44 +29,84 @@ def publish_to_facebook(
     post_id_db: int = None,
 ) -> Optional[str]:
     """
-    Upload photo + caption to Facebook Page.
+    Upload photo + caption to Facebook Page as a proper feed post.
     Returns the FB post ID on success, None on failure.
     """
     if not settings.FB_PAGE_ACCESS_TOKEN or not settings.FB_PAGE_ID:
         logger.warning("Facebook credentials not configured. Skipping FB publish.")
         return None
 
-    url = f"{FB_GRAPH}/{settings.FB_PAGE_ID}/photos"
+    import requests
 
     try:
         with open(image_path, "rb") as f:
             image_data = f.read()
 
-        files = {"source": (image_path.name, image_data, "image/jpeg")}
-        data  = {
-            "caption":      caption,
-            "access_token": settings.FB_PAGE_ACCESS_TOKEN,
-            "published":    "true",
-        }
+        # Step 1: Upload image unpublished to get a photo ID
+        upload_url = f"{FB_GRAPH}/{settings.FB_PAGE_ID}/photos"
+        upload_resp = requests.post(
+            upload_url,
+            data={
+                "access_token": settings.FB_PAGE_ACCESS_TOKEN,
+                "published": "false",
+            },
+            files={"source": (image_path.name, image_data, "image/jpeg")},
+            timeout=60,
+        )
+        upload_result = upload_resp.json()
 
-        # requests needs form-data for file upload
-        import requests
-        resp = requests.post(url, data=data, files={"source": (image_path.name, image_data, "image/jpeg")}, timeout=60)
-        result = resp.json()
+        if "id" not in upload_result:
+            logger.error("Image upload failed: %s", upload_result)
+            _mark_failed(post_id_db, str(upload_result))
+            return None
 
-        if resp.status_code == 200 and "id" in result:
-            fb_post_id = result["id"]
-            logger.info("✅ Facebook post published: %s", fb_post_id)
+        photo_id = upload_result["id"]
+
+        # Step 2: Create a proper feed post with the uploaded photo
+        feed_url = f"{FB_GRAPH}/{settings.FB_PAGE_ID}/feed"
+        feed_resp = requests.post(
+            feed_url,
+            data={
+                "message": caption,
+                "access_token": settings.FB_PAGE_ACCESS_TOKEN,
+                "attached_media[0]": f'{{"media_fbid":"{photo_id}"}}',
+            },
+            timeout=60,
+        )
+        feed_result = feed_resp.json()
+
+        if feed_resp.status_code == 200 and "id" in feed_result:
+            fb_post_id = feed_result["id"]
+            logger.info("Facebook post published: %s", fb_post_id)
             _mark_published(post_id_db, "facebook", fb_post_id=fb_post_id)
             return fb_post_id
         else:
-            error = result.get("error", {})
-            logger.error(
-                "❌ Facebook publish failed: %s — %s",
-                error.get("code"), error.get("message")
+            # Fallback: try direct photo post
+            logger.warning("Feed post failed, trying direct photo post: %s", feed_result)
+            direct_url = f"{FB_GRAPH}/{settings.FB_PAGE_ID}/photos"
+            direct_resp = requests.post(
+                direct_url,
+                data={
+                    "caption": caption,
+                    "access_token": settings.FB_PAGE_ACCESS_TOKEN,
+                    "published": "true",
+                    "no_story": "false",
+                },
+                files={"source": (image_path.name, image_data, "image/jpeg")},
+                timeout=60,
             )
-            _mark_failed(post_id_db, str(error))
-            return None
+            direct_result = direct_resp.json()
+
+            if direct_resp.status_code == 200 and "id" in direct_result:
+                fb_post_id = direct_result["id"]
+                logger.info("Facebook photo post published: %s", fb_post_id)
+                _mark_published(post_id_db, "facebook", fb_post_id=fb_post_id)
+                return fb_post_id
+            else:
+                error = direct_result.get("error", {})
+                logger.error("Facebook publish failed: %s - %s", error.get("code"), error.get("message"))
+                _mark_failed(post_id_db, str(error))
+                return None
 
     except Exception as e:
         logger.exception("Facebook publish exception: %s", e)
@@ -83,23 +123,13 @@ def publish_to_instagram(
     caption: str,
     post_id_db: int = None,
 ) -> Optional[str]:
-    """
-    Two-step Instagram Graph API publish:
-    1. Create media container (upload image URL)
-    2. Publish the container
-
-    NOTE: Instagram requires a publicly accessible image URL.
-    For local images, we use a temporary hosting approach via the FB photo endpoint.
-    """
     if not settings.FB_PAGE_ACCESS_TOKEN or not settings.IG_USER_ID:
         logger.warning("Instagram credentials not configured. Skipping IG publish.")
         return None
 
-    # Step 1: Create media object
     container_url = f"{FB_GRAPH}/{settings.IG_USER_ID}/media"
 
     try:
-        # Upload to FB first to get a hosted URL
         import requests
         with open(image_path, "rb") as f:
             image_data = f.read()
@@ -109,7 +139,7 @@ def publish_to_instagram(
             fb_upload_url,
             data={
                 "access_token": settings.FB_PAGE_ACCESS_TOKEN,
-                "published": "false",  # unpublished — just for hosting
+                "published": "false",
             },
             files={"source": (image_path.name, image_data, "image/jpeg")},
             timeout=60,
@@ -120,7 +150,6 @@ def publish_to_instagram(
             logger.error("Could not upload image to FB for IG hosting: %s", fb_result)
             return None
 
-        # Get URL of the uploaded photo
         photo_id   = fb_result["id"]
         photo_data = get_json(
             f"{FB_GRAPH}/{photo_id}",
@@ -132,7 +161,6 @@ def publish_to_instagram(
 
         image_url = photo_data["images"][0]["source"]
 
-        # Create IG media container
         container_resp = requests.post(
             container_url,
             data={
@@ -150,11 +178,9 @@ def publish_to_instagram(
 
         container_id = container_result["id"]
 
-        # Wait for container to process
         time.sleep(5)
         _wait_for_ig_container(container_id)
 
-        # Step 2: Publish
         publish_url = f"{FB_GRAPH}/{settings.IG_USER_ID}/media_publish"
         pub_resp = requests.post(
             publish_url,
@@ -168,7 +194,7 @@ def publish_to_instagram(
 
         if "id" in pub_result:
             ig_post_id = pub_result["id"]
-            logger.info("✅ Instagram post published: %s", ig_post_id)
+            logger.info("Instagram post published: %s", ig_post_id)
             _mark_published(post_id_db, "instagram", ig_post_id=ig_post_id)
             return ig_post_id
         else:
@@ -183,7 +209,6 @@ def publish_to_instagram(
 
 
 def _wait_for_ig_container(container_id: str, max_wait: int = 60):
-    """Poll until IG media container is ready."""
     for _ in range(max_wait // 5):
         data = get_json(
             f"{FB_GRAPH}/{container_id}",
@@ -206,11 +231,6 @@ def publish(
     platforms: list[str] = None,
     post_id_db: int = None,
 ) -> dict:
-    """
-    Publish to specified platforms.
-    platforms: ['facebook'], ['instagram'], or ['facebook', 'instagram']
-    Returns dict with fb_post_id, ig_post_id.
-    """
     if platforms is None:
         platforms = ["facebook"]
 
