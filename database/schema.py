@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS match_state (
 );
 """
 
+# Columns posts table must have (all nullable — publisher_agent doesn't fill all of them)
 POSTS_COLUMNS = {
     "event_id":      "INTEGER DEFAULT 0",
     "poster_path":   "TEXT",
@@ -88,6 +89,58 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _rebuild_posts_if_needed(conn: sqlite3.Connection) -> None:
+    """
+    If posts table has NOT NULL on content_hash (old schema), rebuild it.
+    SQLite can't DROP constraints with ALTER TABLE, so we rename → recreate → copy.
+    """
+    # Check if content_hash has notnull=1
+    cols = conn.execute("PRAGMA table_info(posts)").fetchall()
+    for col in cols:
+        # col: (cid, name, type, notnull, dflt_value, pk)
+        if col[1] == "content_hash" and col[3] == 1:
+            logger.info("Rebuilding posts table to remove NOT NULL on content_hash...")
+            conn.executescript("""
+                PRAGMA foreign_keys=OFF;
+
+                ALTER TABLE posts RENAME TO posts_old;
+
+                CREATE TABLE posts (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id        INTEGER DEFAULT 0,
+                    poster_path     TEXT,
+                    caption_text    TEXT,
+                    hashtags        TEXT    DEFAULT '',
+                    platform        TEXT    DEFAULT 'facebook',
+                    status          TEXT    DEFAULT 'pending',
+                    content_hash    TEXT,
+                    content_type    TEXT,
+                    competition     TEXT,
+                    fb_post_id      TEXT,
+                    ig_post_id      TEXT,
+                    error_message   TEXT,
+                    likes           INTEGER DEFAULT 0,
+                    comments        INTEGER DEFAULT 0,
+                    shares          INTEGER DEFAULT 0,
+                    posted_at       DATETIME DEFAULT (datetime('now')),
+                    published_at    DATETIME
+                );
+
+                INSERT OR IGNORE INTO posts
+                    (id, content_hash, content_type, competition, fb_post_id, posted_at, likes, comments, shares)
+                SELECT
+                    id, content_hash, content_type, competition, fb_post_id,
+                    COALESCE(posted_at, datetime('now')), COALESCE(likes,0), COALESCE(comments,0), COALESCE(shares,0)
+                FROM posts_old;
+
+                DROP TABLE posts_old;
+
+                PRAGMA foreign_keys=ON;
+            """)
+            logger.info("posts table rebuilt successfully.")
+            return
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     """Add any missing columns to posts table — safe to run every startup."""
     existing = {row[1] for row in conn.execute("PRAGMA table_info(posts)").fetchall()}
@@ -98,8 +151,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 def init_db() -> None:
-    """Create all tables and migrate any missing columns."""
+    """Create tables, fix schema issues, migrate missing columns."""
     with get_connection() as conn:
         conn.executescript(DDL)
+        _rebuild_posts_if_needed(conn)
         _migrate(conn)
     logger.info("Database initialised at %s", DB_PATH)
