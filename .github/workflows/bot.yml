@@ -8,9 +8,14 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to commit the DB back to the repo
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -30,10 +35,26 @@ jobs:
           echo "FB_PAGE_ACCESS_TOKEN=${{ secrets.FB_PAGE_ACCESS_TOKEN }}" >> .env
           echo "FB_PAGE_ID=${{ secrets.FB_PAGE_ID }}" >> .env
           echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
-          echo "MIN_PRIORITY_TO_POST=50" >> .env
-          echo "MAX_POSTS_PER_HOUR=6" >> .env
-          echo "DEDUPE_WINDOW_HOURS=48" >> .env
+          echo "MIN_PRIORITY_TO_POST=40" >> .env
+          echo "MAX_POSTS_PER_HOUR=8" >> .env
+          echo "DEDUPE_WINDOW_HOURS=6" >> .env
           echo "TIMEZONE=Africa/Nairobi" >> .env
 
       - name: Run bot cycle
         run: python run_once.py
+
+      - name: Save database state back to repo
+        if: always()   # run even if the bot cycle had errors
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Only commit if the DB file actually changed
+          if git diff --quiet -- "*.db" "database/" 2>/dev/null || \
+             git ls-files --others --exclude-standard | grep -q "\.db$"; then
+            git add -f "*.db" || true
+            git add -f database/*.db || true
+            git diff --staged --quiet || git commit -m "chore: persist bot state [skip ci]"
+            git push
+          else
+            echo "No DB changes to commit"
+          fi
