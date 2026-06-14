@@ -1,8 +1,7 @@
 """
 agents/caption_agent.py — Football Pulse AI
 Generates captions, hashtags, and engagement questions.
-Version 1: Template-based (works with zero APIs).
-Version 2: Optional Grok (xAI) integration if GROK_API_KEY is set.
+Uses Google Gemini AI if GEMINI_API_KEY is set, otherwise falls back to templates.
 """
 
 import random
@@ -25,7 +24,7 @@ COMPETITION_TAGS = {
     "La Liga":                 ["#LaLiga", "#PrimeraDivision"],
     "UEFA Champions League":   ["#UCL", "#ChampionsLeague"],
     "UEFA Europa League":      ["#UEL", "#EuropaLeague"],
-    "FIFA World Cup":          ["#WorldCup", "#FIFA", "#Qatar2022"],
+    "FIFA World Cup":          ["#WorldCup", "#FIFA", "#WorldCup2026"],
     "Bundesliga":              ["#Bundesliga", "#GermanFootball"],
     "Serie A":                 ["#SerieA", "#ItalianFootball"],
     "Ligue 1":                 ["#Ligue1", "#FrenchFootball"],
@@ -51,46 +50,46 @@ TEAM_TAG_OVERRIDES = {
 
 ENGAGEMENT_QUESTIONS = {
     "GOAL": [
-        "Who was your Man of the Match? 🏆",
-        "Was that a quality finish? 🔥",
-        "What do you think of this goal? Drop your reaction below! 👇",
-        "Did you see that coming? 👀",
+        "Who was your Man of the Match?",
+        "Was that a quality finish?",
+        "What do you think of this goal? Drop your reaction below!",
+        "Did you see that coming?",
     ],
     "FULLTIME": [
-        "What's your player ratings for this match? 📊",
-        "Fair result? Tell us below! 💬",
-        "Who was the standout performer? 🌟",
-        "Rate this match out of 10 👇",
+        "What are your player ratings for this match?",
+        "Fair result? Tell us below!",
+        "Who was the standout performer?",
+        "Rate this match out of 10!",
     ],
     "TRANSFER_ALERT": [
-        "Good signing or overpay? 🤔",
-        "Will this transfer work out? Vote below! 🗳️",
-        "How many goals will they score this season? ⚽",
-        "Smart business or panic buy? 💸",
+        "Good signing or overpay?",
+        "Will this transfer work out? Vote below!",
+        "How many goals will they score this season?",
+        "Smart business or panic buy?",
     ],
     "LEAGUE_TABLE": [
-        "Who wins the title? Drop your prediction! 🏆",
-        "Any surprises in the table? 👀",
-        "Who do you think gets relegated? 📉",
+        "Who wins the title? Drop your prediction!",
+        "Any surprises in the table?",
+        "Who do you think gets relegated?",
     ],
     "TOP_SCORERS": [
-        "Who wins the Golden Boot? 🥇",
-        "Which striker impresses you most? 🔥",
+        "Who wins the Golden Boot?",
+        "Which striker impresses you most?",
     ],
     "MATCHDAY": [
-        "Who are you backing today? 🙌",
-        "Score prediction? Drop it below! 🎯",
-        "Are you watching this one live? 📺",
+        "Who are you backing today?",
+        "Score prediction? Drop it below!",
+        "Are you watching this one live?",
     ],
     "FOOTBALL_FACT": [
-        "Did you know that? Share with a football fan! 🔁",
-        "Mind blown? Drop a 🤯 below!",
-        "What's your favourite football fact? 📚",
+        "Did you know that? Share with a football fan!",
+        "Mind blown? Drop a comment below!",
+        "What is your favourite football fact?",
     ],
     "default": [
-        "What do you think? Let us know below! 💬",
-        "Thoughts? Drop them in the comments! 👇",
-        "Share this with a fellow football fan! 🔁",
+        "What do you think? Let us know below!",
+        "Thoughts? Drop them in the comments!",
+        "Share this with a fellow football fan!",
     ]
 }
 
@@ -100,28 +99,28 @@ ENGAGEMENT_QUESTIONS = {
 
 GOAL_TEMPLATES = [
     """\
-⚽ GOAL! {scorer} finds the net for {team}!
+GOAL! {scorer} finds the net for {team}!
 
-{home_team} {home_score} – {away_score} {away_team}
-🕐 {minute}' | {competition}
-
-{engagement}
-{hashtags}""",
-
-    """\
-🔥 {minute}' — {scorer} SCORES! {team} take the lead!
-
-{home_team} {home_score} – {away_score} {away_team}
-📍 {competition}
+{home_team} {home_score} - {away_score} {away_team}
+{minute}' | {competition}
 
 {engagement}
 {hashtags}""",
 
     """\
-⚡ BOOM! {scorer} with a stunning strike for {team}!
+{minute}' - {scorer} SCORES! {team} take the lead!
 
-Score: {home_team} {home_score} – {away_score} {away_team}
-⏱️ {minute} minutes played | {competition}
+{home_team} {home_score} - {away_score} {away_team}
+{competition}
+
+{engagement}
+{hashtags}""",
+
+    """\
+WHAT A GOAL! {scorer} with a stunning strike for {team}!
+
+Score: {home_team} {home_score} - {away_score} {away_team}
+{minute} minutes played | {competition}
 
 {engagement}
 {hashtags}""",
@@ -129,19 +128,19 @@ Score: {home_team} {home_score} – {away_score} {away_team}
 
 FULLTIME_TEMPLATES = [
     """\
-🏁 FULL TIME!
+FULL TIME!
 
-{home_team} {home_score} – {away_score} {away_team}
-📌 {competition}
+{home_team} {home_score} - {away_score} {away_team}
+{competition}
 
 {goals_summary}
 {engagement}
 {hashtags}""",
 
     """\
-⏱️ IT'S ALL OVER!
+IT'S ALL OVER!
 
-{home_team} {home_score} – {away_score} {away_team}
+{home_team} {home_score} - {away_score} {away_team}
 
 The final whistle has blown in {competition}.
 
@@ -152,7 +151,7 @@ The final whistle has blown in {competition}.
 
 TRANSFER_TEMPLATES = [
     """\
-🚨 TRANSFER CONFIRMED ✅
+TRANSFER CONFIRMED!
 
 {player} is officially heading to {to_club}!
 
@@ -164,10 +163,10 @@ Fee: {fee}
 {hashtags}""",
 
     """\
-💥 DONE DEAL! {player} signs for {to_club}!
+DONE DEAL! {player} signs for {to_club}!
 
-✈️ {from_club} → {to_club}
-💰 Fee: {fee}
+{from_club} to {to_club}
+Fee: {fee}
 
 {engagement}
 {hashtags}""",
@@ -175,19 +174,19 @@ Fee: {fee}
 
 MATCHDAY_TEMPLATES = [
     """\
-🏟️ MATCHDAY! 🔥
+MATCHDAY!
 
 {home_team} vs {away_team}
-🕐 {kickoff_time} | {competition}
-📍 {venue}
+{kickoff_time} | {competition}
+{venue}
 
 {engagement}
 {hashtags}""",
 
     """\
-🎮 IT'S GAME DAY!
+IT'S GAME DAY!
 
-{home_team} 🆚 {away_team}
+{home_team} vs {away_team}
 
 Competition: {competition}
 Kickoff: {kickoff_time}
@@ -198,7 +197,7 @@ Kickoff: {kickoff_time}
 
 FACT_TEMPLATES = [
     """\
-📚 FOOTBALL FACT 💡
+FOOTBALL FACT
 
 {fact_text}
 
@@ -206,7 +205,7 @@ FACT_TEMPLATES = [
 {hashtags}""",
 
     """\
-🤓 DID YOU KNOW?
+DID YOU KNOW?
 
 {fact_text}
 
@@ -236,7 +235,6 @@ def build_hashtags(
         tags += COMPETITION_TAGS.get(competition, [f"#{competition.replace(' ', '')}"])
     if teams:
         tags += [_team_hashtag(t) for t in teams if t]
-    # Deduplicate, keep order
     seen = set(); unique = []
     for t in tags:
         if t not in seen:
@@ -247,6 +245,50 @@ def build_hashtags(
 def _engagement(event_type: str) -> str:
     pool = ENGAGEMENT_QUESTIONS.get(event_type, ENGAGEMENT_QUESTIONS["default"])
     return random.choice(pool)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Google Gemini AI captions (free tier)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_with_gemini(prompt: str) -> Optional[str]:
+    """
+    Use Google Gemini free tier to generate captions if GEMINI_API_KEY is set.
+    Free tier model: gemini-1.5-flash
+    """
+    gemini_key = getattr(settings, 'GEMINI_API_KEY', None) or __import__('os').getenv('GEMINI_API_KEY', '')
+    if not gemini_key:
+        return None
+    try:
+        import requests
+        resp = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}",
+            headers={"Content-Type": "application/json"},
+            json={
+                "contents": [{
+                    "parts": [{
+                        "text": (
+                            "You are a football social media content creator for Football Pulse page. "
+                            "Write punchy, engaging captions for football posts. "
+                            "Always include relevant hashtags and a fan engagement question. "
+                            "Keep responses under 200 words. No emojis that might not render correctly.\n\n"
+                            + prompt
+                        )
+                    }]
+                }],
+                "generationConfig": {
+                    "maxOutputTokens": 300,
+                    "temperature": 0.85,
+                }
+            },
+            timeout=20,
+        )
+        data = resp.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        return text.strip()
+    except Exception as e:
+        logger.warning("Gemini generation failed: %s - falling back to template.", e)
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -264,22 +306,31 @@ def generate_goal_caption(
     competition: str,
     assist: str = None,
 ) -> str:
+    # Try Gemini first
+    gemini_key = getattr(settings, 'GEMINI_API_KEY', None) or __import__('os').getenv('GEMINI_API_KEY', '')
+    if gemini_key:
+        prompt = (
+            f"Write a short hype football social media caption for a goal.\n"
+            f"Scorer: {scorer}, Team: {team}, "
+            f"Score: {home_team} {home_score} - {away_score} {away_team}, "
+            f"Minute: {minute}', Competition: {competition}.\n"
+            f"Include relevant hashtags and an engaging question for fans."
+        )
+        result = generate_with_gemini(prompt)
+        if result:
+            return result
+
     hashtags = build_hashtags("GOAL", competition, [home_team, away_team])
     engagement = _engagement("GOAL")
     caption = random.choice(GOAL_TEMPLATES).format(
-        scorer=scorer,
-        team=team,
-        home_team=home_team,
-        away_team=away_team,
-        home_score=home_score,
-        away_score=away_score,
-        minute=minute,
-        competition=competition,
-        hashtags=hashtags,
-        engagement=engagement,
+        scorer=scorer, team=team,
+        home_team=home_team, away_team=away_team,
+        home_score=home_score, away_score=away_score,
+        minute=minute, competition=competition,
+        hashtags=hashtags, engagement=engagement,
     )
     if assist:
-        caption = caption.replace(hashtags, f"🅰️ Assist: {assist}\n\n{hashtags}")
+        caption = caption.replace(hashtags, f"Assist: {assist}\n\n{hashtags}")
     return caption.strip()
 
 
@@ -291,12 +342,23 @@ def generate_fulltime_caption(
     competition: str,
     goals: list[dict] = None,
 ) -> str:
+    gemini_key = getattr(settings, 'GEMINI_API_KEY', None) or __import__('os').getenv('GEMINI_API_KEY', '')
+    if gemini_key:
+        prompt = (
+            f"Write a football full-time result caption.\n"
+            f"{home_team} {home_score} - {away_score} {away_team} | {competition}.\n"
+            f"Include hashtags and ask fans for their player ratings."
+        )
+        result = generate_with_gemini(prompt)
+        if result:
+            return result
+
     hashtags = build_hashtags("FULLTIME", competition, [home_team, away_team])
     engagement = _engagement("FULLTIME")
 
     if goals:
-        home_goals = [f"⚽ {g['player']} {g.get('minute', '')}'" for g in goals if g.get("team") == "home"]
-        away_goals = [f"⚽ {g['player']} {g.get('minute', '')}'" for g in goals if g.get("team") == "away"]
+        home_goals = [f"{g['player']} {g.get('minute', '')}'" for g in goals if g.get("team") == "home"]
+        away_goals = [f"{g['player']} {g.get('minute', '')}'" for g in goals if g.get("team") == "away"]
         parts = []
         if home_goals: parts.append(f"{home_team}:\n" + "\n".join(home_goals))
         if away_goals: parts.append(f"{away_team}:\n" + "\n".join(away_goals))
@@ -305,14 +367,10 @@ def generate_fulltime_caption(
         goals_summary = ""
 
     caption = random.choice(FULLTIME_TEMPLATES).format(
-        home_team=home_team,
-        away_team=away_team,
-        home_score=home_score,
-        away_score=away_score,
-        competition=competition,
-        goals_summary=goals_summary,
-        hashtags=hashtags,
-        engagement=engagement,
+        home_team=home_team, away_team=away_team,
+        home_score=home_score, away_score=away_score,
+        competition=competition, goals_summary=goals_summary,
+        hashtags=hashtags, engagement=engagement,
     )
     return caption.strip()
 
@@ -323,16 +381,23 @@ def generate_transfer_caption(
     to_club: str,
     fee: str = "Undisclosed",
 ) -> str:
+    gemini_key = getattr(settings, 'GEMINI_API_KEY', None) or __import__('os').getenv('GEMINI_API_KEY', '')
+    if gemini_key:
+        prompt = (
+            f"Write a football transfer announcement caption.\n"
+            f"Player: {player}, From: {from_club}, To: {to_club}, Fee: {fee}.\n"
+            f"Include hashtags and ask fans their opinion on the transfer."
+        )
+        result = generate_with_gemini(prompt)
+        if result:
+            return result
+
     hashtags = build_hashtags("TRANSFER_ALERT", teams=[from_club, to_club])
     hashtags += " #TransferNews #Transfers"
     engagement = _engagement("TRANSFER_ALERT")
     caption = random.choice(TRANSFER_TEMPLATES).format(
-        player=player,
-        from_club=from_club,
-        to_club=to_club,
-        fee=fee,
-        hashtags=hashtags,
-        engagement=engagement,
+        player=player, from_club=from_club, to_club=to_club,
+        fee=fee, hashtags=hashtags, engagement=engagement,
     )
     return caption.strip()
 
@@ -347,25 +412,30 @@ def generate_matchday_caption(
     hashtags = build_hashtags("MATCHDAY", competition, [home_team, away_team])
     engagement = _engagement("MATCHDAY")
     caption = random.choice(MATCHDAY_TEMPLATES).format(
-        home_team=home_team,
-        away_team=away_team,
-        kickoff_time=kickoff_time,
-        competition=competition,
-        venue=venue or "TBA",
-        hashtags=hashtags,
-        engagement=engagement,
+        home_team=home_team, away_team=away_team,
+        kickoff_time=kickoff_time, competition=competition,
+        venue=venue or "TBA", hashtags=hashtags, engagement=engagement,
     )
     return caption.strip()
 
 
 def generate_fact_caption(fact_text: str) -> str:
+    gemini_key = getattr(settings, 'GEMINI_API_KEY', None) or __import__('os').getenv('GEMINI_API_KEY', '')
+    if gemini_key:
+        prompt = (
+            f"Write a fun football fact social media caption.\n"
+            f"Fact: {fact_text}.\n"
+            f"Include football hashtags and ask fans if they knew this fact."
+        )
+        result = generate_with_gemini(prompt)
+        if result:
+            return result
+
     hashtags = build_hashtags("FOOTBALL_FACT")
     hashtags += " #FootballHistory #FootballTrivia"
     engagement = _engagement("FOOTBALL_FACT")
     caption = random.choice(FACT_TEMPLATES).format(
-        fact_text=fact_text,
-        hashtags=hashtags,
-        engagement=engagement,
+        fact_text=fact_text, hashtags=hashtags, engagement=engagement,
     )
     return caption.strip()
 
@@ -374,9 +444,9 @@ def generate_league_table_caption(competition: str, leader: str, points: int) ->
     hashtags = build_hashtags("LEAGUE_TABLE", competition)
     engagement = _engagement("LEAGUE_TABLE")
     return f"""\
-📊 {competition.upper()} TABLE UPDATE
+{competition.upper()} TABLE UPDATE
 
-🥇 {leader} lead with {points} points!
+{leader} lead with {points} points!
 
 {engagement}
 {hashtags}""".strip()
@@ -386,102 +456,15 @@ def generate_top_scorers_caption(competition: str, leader: str, goals: int) -> s
     hashtags = build_hashtags("TOP_SCORERS", competition)
     engagement = _engagement("TOP_SCORERS")
     return f"""\
-🏆 {competition.upper()} TOP SCORERS
+{competition.upper()} TOP SCORERS
 
-⚽ {leader} leads the race with {goals} goals!
+{leader} leads the race with {goals} goals!
 
 {engagement}
 {hashtags}""".strip()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Optional: Grok (xAI) AI captions
-# Free tier: https://x.ai/api  — uses OpenAI-compatible API format
-# ─────────────────────────────────────────────────────────────────────────────
-
-def generate_with_grok(prompt: str) -> Optional[str]:
-    """
-    Use Grok (xAI) free tier to generate captions if GROK_API_KEY is set.
-    Grok uses an OpenAI-compatible /v1/chat/completions endpoint.
-    Free tier model: grok-3-mini
-    """
-    if not settings.GROK_API_KEY:
-        return None
-    try:
-        import requests
-        resp = requests.post(
-            "https://api.x.ai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.GROK_API_KEY}",
-                "Content-Type":  "application/json",
-            },
-            json={
-                "model": "grok-3-mini",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a football social media content creator. "
-                            "Write punchy, engaging captions for football posts. "
-                            "Always include relevant hashtags and a fan engagement question. "
-                            "Keep responses under 200 words."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": 300,
-                "temperature": 0.85,
-            },
-            timeout=20,
-        )
-        data = resp.json()
-        text = data["choices"][0]["message"]["content"]
-        return text.strip()
-    except Exception as e:
-        logger.warning("Grok generation failed: %s — falling back to template.", e)
-        return None
-
-
 def smart_caption(event_type: str, context: dict) -> str:
-    """
-    Try Grok AI first; fall back to template if key not set or call fails.
-    context keys vary by event_type.
-    """
-    if settings.GROK_API_KEY:
-        prompt_map = {
-            "GOAL": (
-                f"Write a short, hype football social media caption (max 150 words) for a goal.\n"
-                f"Scorer: {context.get('scorer')}, Team: {context.get('team')}, "
-                f"Score: {context.get('home_team')} {context.get('home_score')} – "
-                f"{context.get('away_score')} {context.get('away_team')}, "
-                f"Minute: {context.get('minute')}', Competition: {context.get('competition')}.\n"
-                f"Include relevant hashtags and an engaging question."
-            ),
-            "FULLTIME": (
-                f"Write a football full-time result caption (max 150 words).\n"
-                f"{context.get('home_team')} {context.get('home_score')} – "
-                f"{context.get('away_score')} {context.get('away_team')} | "
-                f"{context.get('competition')}.\n"
-                f"Include hashtags and ask fans for their player ratings."
-            ),
-            "TRANSFER_ALERT": (
-                f"Write a football transfer announcement caption (max 150 words).\n"
-                f"Player: {context.get('player')}, From: {context.get('from_club')}, "
-                f"To: {context.get('to_club')}, Fee: {context.get('fee')}.\n"
-                f"Include hashtags and ask fans their opinion on the transfer."
-            ),
-            "FOOTBALL_FACT": (
-                f"Write a fun football fact social media caption (max 100 words).\n"
-                f"Fact: {context.get('fact_text')}.\n"
-                f"Include football hashtags and ask fans if they knew this."
-            ),
-        }
-        if event_type in prompt_map:
-            result = generate_with_grok(prompt_map[event_type])
-            if result:
-                return result
-
-    # Fallback to templates
     dispatch = {
         "GOAL":            generate_goal_caption,
         "FULLTIME":        generate_fulltime_caption,

@@ -39,6 +39,7 @@ for d in [DB_PATH.parent, OUTPUT_DIR, POSTER_DIR, CAPTION_DIR, LOG_DIR]:
 FOOTBALL_DATA_API_KEY = _env("FOOTBALL_DATA_API_KEY", "")
 THESPORTSDB_API_KEY   = _env("THESPORTSDB_API_KEY", "1")
 GROK_API_KEY          = _env("GROK_API_KEY", "")
+GEMINI_API_KEY        = _env("GEMINI_API_KEY", "")
 
 # ── Meta / Social ──────────────────────────────────────────────────────────
 FB_PAGE_ACCESS_TOKEN  = _env("FB_PAGE_ACCESS_TOKEN", "")
