@@ -1,7 +1,6 @@
 """
 agents/injury_transfer_agent.py — Football Pulse AI
-Monitors RSS feeds for transfer and injury news, generates posts automatically.
-Detects keywords and routes to the correct poster + caption type.
+Monitors RSS feeds for transfer and injury news.
 """
 
 import re
@@ -19,13 +18,9 @@ from agents import publisher_agent
 
 logger = setup_logger("injury_transfer_agent")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Keyword patterns
-# ─────────────────────────────────────────────────────────────────────────────
-
 TRANSFER_KEYWORDS = re.compile(
     r"\b(signs?|signed|transfer(red)?|joins?|joined|deal done|done deal|"
-    r"fee|moves? to|move to|offici(al|ally)|completed|agreement|contract)\b",
+    r"fee|moves? to|move to|offici(al|ally)|completed|agreement|contract|announce[sd]?)\b",
     re.IGNORECASE,
 )
 
@@ -35,15 +30,69 @@ INJURY_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+KNOWN_CLUBS = [
+    "Real Madrid","Barcelona","Manchester United","Manchester City",
+    "Arsenal","Chelsea","Liverpool","Tottenham","Newcastle",
+    "Bayern Munich","PSG","Paris Saint-Germain","Juventus","AC Milan",
+    "Inter Milan","Atletico Madrid","Borussia Dortmund","Ajax",
+    "Porto","Benfica","Napoli","Roma","Lazio","Sevilla",
+    "Valencia","Villarreal","Leicester","Aston Villa","West Ham",
+    "Everton","Leeds","Wolves","Brighton","Brentford",
+    "Crystal Palace","Fulham","Nottingham Forest","Bournemouth",
+    "Al-Nassr","Al-Hilal",
+]
 
-def _extract_clubs(text: str) -> tuple[str, str]:
-    m = re.search(r"(\w[\w\s]+?)\s+(?:to|joins?)\s+([\w\s]+?)(?:\s+for|\s+on|\.|,|$)", text, re.IGNORECASE)
-    if m:
-        return m.group(1).strip(), m.group(2).strip()
-    return "Unknown Club", "Unknown Club"
+
+def _extract_player_and_clubs(title: str, summary: str) -> tuple:
+    text = f"{title} {summary}"
+
+    # Find known clubs mentioned
+    found_clubs = [c for c in KNOWN_CLUBS if c.lower() in text.lower()]
+
+    # Extract player: first capitalized words before a transfer verb
+    player = ""
+    player_match = re.match(
+        r"^([A-Z][a-zA-Z\-\']+(?:\s+[A-Z][a-zA-Z\-\']+){0,3})\s+"
+        r"(?:signs?|joins?|completes?|moves?|heads?|set to|agrees?|to join|to sign|agrees)",
+        title
+    )
+    if player_match:
+        player = player_match.group(1).strip()
+
+    if not player or len(player) < 3:
+        words = title.split()
+        cap_words = []
+        for w in words[:5]:
+            clean = re.sub(r"[^a-zA-Z\-\']", "", w)
+            if clean and clean[0].isupper() and len(clean) > 1:
+                cap_words.append(clean)
+            else:
+                break
+        player = " ".join(cap_words[:2]) if cap_words else "Player TBC"
+
+    # Default club assignment
+    from_club = found_clubs[0] if len(found_clubs) >= 2 else "Unknown"
+    to_club   = found_clubs[1] if len(found_clubs) >= 2 else (found_clubs[0] if found_clubs else "Unknown")
+
+    # Refine with directional patterns
+    to_match = re.search(
+        r"(?:to|joins?|heading to|move to|signs? for)\s+([A-Z][a-zA-Z\s]{2,25})(?:\s+for|\s+on|\.|,|$)",
+        title, re.IGNORECASE
+    )
+    from_match = re.search(
+        r"(?:from|leaves?|departing)\s+([A-Z][a-zA-Z\s]{2,25})(?:\s+to|\s+for|\.|,|$)",
+        title, re.IGNORECASE
+    )
+
+    if to_match:
+        cand = to_match.group(1).strip()
+        to_club = next((c for c in KNOWN_CLUBS if c.lower() in cand.lower()), cand if len(cand) < 25 else to_club)
+
+    if from_match:
+        cand = from_match.group(1).strip()
+        from_club = next((c for c in KNOWN_CLUBS if c.lower() in cand.lower()), cand if len(cand) < 25 else from_club)
+
+    return player or "Player TBC", from_club, to_club
 
 
 def _extract_fee(text: str) -> str:
@@ -58,16 +107,8 @@ def _article_hash(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()[:12]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main scanner
-# ─────────────────────────────────────────────────────────────────────────────
-
 def scan_for_news():
-    """
-    Pull all RSS feeds, detect transfer/injury articles, generate posts.
-    Called by run_once.py every 15 minutes via GitHub Actions.
-    """
-    logger.debug("Scanning RSS feeds for transfer/injury news…")
+    logger.debug("Scanning RSS feeds...")
     processed = 0
 
     for feed_url in settings.RSS_FEEDS:
@@ -84,28 +125,19 @@ def scan_for_news():
             text    = f"{title} {summary}"
             art_id  = _article_hash(link)
 
-            # Skip if already processed
             if decision.is_duplicate("RSS_ARTICLE", art_id):
                 continue
 
-            # ── Transfer detection ──────────────────────────────────────
             if TRANSFER_KEYWORDS.search(text):
                 logger.info("Transfer article detected: %s", title[:80])
-
-                # should_post returns a single bool — fixed
                 if decision.should_post("TRANSFER_ALERT", "default", dedup_key=art_id):
-                    from_club, to_club = _extract_clubs(text)
+                    player, from_club, to_club = _extract_player_and_clubs(title, summary)
                     fee = _extract_fee(text)
-
-                    player_match = re.match(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})", title)
-                    player = player_match.group(1) if player_match else title[:30]
-
+                    logger.info("Extracted: player=%s from=%s to=%s", player, from_club, to_club)
                     try:
                         poster_path = poster.create_transfer_alert(
-                            player_name = player,
-                            from_club   = from_club,
-                            to_club     = to_club,
-                            fee         = fee,
+                            player_name=player, from_club=from_club,
+                            to_club=to_club, fee=fee,
                         )
                         cap = caption_agent.generate_transfer_caption(player, from_club, to_club, fee)
                         db_id = publisher_agent.create_post_record(0, poster_path, cap)
@@ -116,22 +148,14 @@ def scan_for_news():
                         logger.error("Transfer post failed: %s", e)
                 continue
 
-            # ── Injury detection ────────────────────────────────────────
             if INJURY_KEYWORDS.search(text):
                 logger.info("Injury article detected: %s", title[:80])
-
-                # should_post returns a single bool — fixed
                 if decision.should_post("INJURY_ALERT", "default", dedup_key=art_id):
                     try:
-                        fact_text = title[:120]
                         poster_path = poster.create_football_fact(
-                            fact_text, category="INJURY UPDATE", emoji="🚑"
+                            title[:120], category="INJURY UPDATE", emoji="🚑"
                         )
-                        cap = (
-                            f"🚑 INJURY NEWS\n\n{title}\n\n"
-                            f"Stay tuned for updates. 👇\n\n"
-                            f"#InjuryNews #Football #FootballPulse"
-                        )
+                        cap = f"INJURY NEWS\n\n{title}\n\nStay tuned for updates.\n\n#InjuryNews #Football #FootballPulse"
                         db_id = publisher_agent.create_post_record(0, poster_path, cap)
                         fb_id = publisher_agent.publish(poster_path, cap, post_id_db=db_id)
                         decision.record_post("INJURY_ALERT", art_id, "default", fb_id)

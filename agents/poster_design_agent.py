@@ -479,59 +479,196 @@ def create_transfer_alert(
     size_key: str = "portrait",
 ) -> Path:
     w, h = SIZES[size_key]
-    img  = _gradient_bg(w, h, (5, 5, 15), (15, 5, 30))
+    img = _gradient_bg(w, h, (8, 18, 14), (10, 10, 26))
 
+    # Soft green glow behind the header
     ov = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    ImageDraw.Draw(ov).ellipse([(-100, -100), (w + 100, h // 2)], fill=(*C["accent_green"], 15))
+    ImageDraw.Draw(ov).ellipse(
+        [(-w * 0.3, -h * 0.25), (w * 1.3, h * 0.45)], fill=(*C["accent_green"], 35)
+    )
     img = Image.alpha_composite(img, ov)
+    draw = ImageDraw.Draw(img)
 
-    draw     = ImageDraw.Draw(img)
-    font_xl  = _load_font(80, True)
-    font_big = _load_font(60, True)
-    font_med = _load_font(44, True)
-    font_sm  = _load_font(32)
-    font_xs  = _load_font(26)
+    font_header  = _load_font(50, True)
+    font_name    = _load_font(64, True)
+    font_sub     = _load_font(30)
+    font_club    = _load_font(34, True)
+    font_label   = _load_font(24, True)
+    font_fee_lbl = _load_font(26, True)
+    font_fee     = _load_font(56, True)
 
-    # No emoji — clean text only on poster
-    draw.text((w // 2, 85), "TRANSFER ALERT", font=font_xl, fill=C["accent_green"], anchor="mm")
-    _draw_divider(draw, 130, w)
+    # ── Bold green header banner ──
+    header_h = 130
+    hdr = Image.new("RGBA", (w, header_h), (*C["accent_green"], 255))
+    img.paste(hdr, (0, 0), hdr)
+    draw = ImageDraw.Draw(img)
+    draw.text((w // 2, header_h // 2), "TRANSFER ALERT", font=font_header,
+              fill=(255, 255, 255), anchor="mm")
 
-    photo_y    = 150
-    player_img = _fetch_image(player_photo_url, (260, 260)) if player_photo_url else None
+    y = header_h + 70
+
+    # ── Player photo (or initials badge if no photo available) ──
+    photo_size = 300
+    ring_size  = photo_size + 20
+    player_img = _fetch_image(player_photo_url, (photo_size, photo_size)) if player_photo_url else None
+
+    ring = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
+    ring_draw = ImageDraw.Draw(ring)
+    ring_draw.ellipse([(0, 0), (ring_size, ring_size)], fill=C["accent_gold"])
+
     if player_img:
-        mask = Image.new("L", (260, 260), 0)
-        ImageDraw.Draw(mask).ellipse([(0, 0), (260, 260)], fill=255)
-        circle = Image.new("RGBA", (260, 260), (0, 0, 0, 0))
+        mask = Image.new("L", (photo_size, photo_size), 0)
+        ImageDraw.Draw(mask).ellipse([(0, 0), (photo_size, photo_size)], fill=255)
+        circle = Image.new("RGBA", (photo_size, photo_size), (0, 0, 0, 0))
         circle.paste(player_img, mask=mask)
-        ring_img = Image.new("RGBA", (280, 280), (0, 0, 0, 0))
-        ImageDraw.Draw(ring_img).ellipse([(0, 0), (280, 280)], fill=C["accent_gold"])
-        ring_img.paste(circle, (10, 10), circle)
-        img.paste(ring_img, (w // 2 - 140, photo_y), ring_img)
-        photo_y += 295
+        ring.paste(circle, (10, 10), circle)
+    else:
+        ring_draw.ellipse([(10, 10), (ring_size - 10, ring_size - 10)], fill=C["bg_card"])
+        initials = "".join(p[0] for p in _clean(player_name).split()[:2]).upper() or "FP"
+        ring_draw.text((ring_size // 2, ring_size // 2), initials,
+                       font=_load_font(110, True), fill=C["accent_gold"], anchor="mm")
 
+    img.paste(ring, (w // 2 - ring_size // 2, y), ring)
+    y += ring_size + 30
     draw = ImageDraw.Draw(img)
-    draw.text((w // 2, photo_y), _clean(player_name).upper(), font=font_big, fill=C["text_primary"], anchor="mm")
-    photo_y += 70
 
-    logo_y    = photo_y
-    from_logo = _fetch_image(from_logo_url, (110, 110))
-    to_logo   = _fetch_image(to_logo_url,   (110, 110))
-    if from_logo: img.paste(from_logo, (120, logo_y), from_logo)
-    draw = ImageDraw.Draw(img)
-    draw.text((w // 2, logo_y + 50), "->", font=font_big, fill=C["accent_gold"], anchor="mm")
-    if to_logo: img.paste(to_logo, (w - 230, logo_y), to_logo)
+    # ── Player name (auto-shrinks to fit width) ──
+    name_text = _clean(player_name).upper()
+    fit_font = font_name
+    while (hasattr(fit_font, "size") and fit_font.size > 32
+           and draw.textlength(name_text, font=fit_font) > w - 120):
+        fit_font = _load_font(fit_font.size - 4, True)
+    draw.text((w // 2, y), name_text, font=fit_font, fill=C["text_primary"], anchor="mm")
+    y += 55
+    draw.text((w // 2, y), "TRANSFER UPDATE", font=font_sub, fill=C["text_muted"], anchor="mm")
+    y += 70
 
-    logo_y += 130
-    draw = ImageDraw.Draw(img)
-    draw.text((175,     logo_y), _clean(from_club), font=font_xs, fill=C["text_muted"],   anchor="mm")
-    draw.text((w - 175, logo_y), _clean(to_club),   font=font_xs, fill=C["accent_green"], anchor="mm")
+    from_unknown = from_club.strip().lower() in ("unknown", "", "free agent")
+    to_unknown   = to_club.strip().lower() in ("unknown", "")
 
-    logo_y += 55
-    draw.rounded_rectangle([(w//2 - 160, logo_y), (w//2 + 160, logo_y + 60)], radius=10, fill=C["accent_gold"])
-    draw.text((w // 2, logo_y + 30), f"FEE: {_clean(fee)}", font=font_sm, fill=C["bg_dark"], anchor="mm")
+    card_y = y
+
+    if to_unknown:
+        # ── Destination not identified yet: a single status panel ──
+        box_w, box_h = 760, 260
+        box_x = (w - box_w) // 2
+        draw.rounded_rectangle([(box_x, card_y), (box_x + box_w, card_y + box_h)],
+                                radius=18, outline=C["accent_gold"], width=3)
+        icon_r = 50
+        icon_cx, icon_cy = w // 2, card_y + 80
+        draw.ellipse([(icon_cx - icon_r, icon_cy - icon_r), (icon_cx + icon_r, icon_cy + icon_r)],
+                      fill=C["accent_gold"])
+        draw.text((icon_cx, icon_cy), "?", font=_load_font(60, True), fill=C["bg_dark"], anchor="mm")
+        draw.text((w // 2, card_y + 165), "TRANSFER IN THE WORKS",
+                  font=font_club, fill=C["accent_gold"], anchor="mm")
+        draw.text((w // 2, card_y + 215), "Follow for confirmation",
+                  font=font_sub, fill=C["text_muted"], anchor="mm")
+        y = card_y + box_h + 60
+
+    elif from_unknown:
+        # ── New signing: single highlighted "TO" card ──
+        card_w, card_h = 460, 240
+        card_x = (w - card_w) // 2
+        draw.rounded_rectangle([(card_x, card_y), (card_x + card_w, card_y + card_h)],
+                                radius=18, fill=(*C["accent_green"], 40))
+        draw.rounded_rectangle([(card_x, card_y), (card_x + card_w, card_y + card_h)],
+                                radius=18, outline=C["accent_green"], width=3)
+        draw.text((card_x + card_w // 2, card_y + 32), "NEW SIGNING",
+                  font=font_label, fill=C["accent_green"], anchor="mm")
+
+        to_logo = _fetch_image(to_logo_url, (100, 100))
+        if to_logo:
+            img.paste(to_logo, (card_x + card_w // 2 - 50, card_y + 60), to_logo)
+            draw = ImageDraw.Draw(img)
+
+        name_y = card_y + 190
+        for line in textwrap.wrap(_clean(to_club), width=18)[:2]:
+            draw.text((card_x + card_w // 2, name_y), line, font=font_club,
+                      fill=C["text_primary"], anchor="mm")
+            name_y += 40
+
+        y = card_y + card_h + 60
+
+    else:
+        # ── Standard FROM -> TO transfer ──
+        card_w, card_h = 380, 220
+        gap = 40
+        start_x = (w - (card_w * 2 + gap)) // 2
+
+        from_x = start_x
+        to_x   = start_x + card_w + gap
+
+        # FROM card
+        draw.rounded_rectangle([(from_x, card_y), (from_x + card_w, card_y + card_h)],
+                                radius=18, fill=(*C["bg_card"], 200))
+        draw.text((from_x + card_w // 2, card_y + 32), "FROM",
+                  font=font_label, fill=C["text_muted"], anchor="mm")
+        from_logo = _fetch_image(from_logo_url, (90, 90))
+        name_y = card_y + 165
+        if from_logo:
+            img.paste(from_logo, (from_x + card_w // 2 - 45, card_y + 55), from_logo)
+            draw = ImageDraw.Draw(img)
+        else:
+            name_y = card_y + 115
+        for line in textwrap.wrap(_clean(from_club), width=16)[:2]:
+            draw.text((from_x + card_w // 2, name_y), line, font=font_club,
+                      fill=C["text_primary"], anchor="mm")
+            name_y += 40
+
+        # TO card
+        draw.rounded_rectangle([(to_x, card_y), (to_x + card_w, card_y + card_h)],
+                                radius=18, fill=(*C["accent_green"], 40))
+        draw.rounded_rectangle([(to_x, card_y), (to_x + card_w, card_y + card_h)],
+                                radius=18, outline=C["accent_green"], width=3)
+        draw.text((to_x + card_w // 2, card_y + 32), "TO",
+                  font=font_label, fill=C["accent_green"], anchor="mm")
+        to_logo = _fetch_image(to_logo_url, (90, 90))
+        name_y = card_y + 165
+        if to_logo:
+            img.paste(to_logo, (to_x + card_w // 2 - 45, card_y + 55), to_logo)
+            draw = ImageDraw.Draw(img)
+        else:
+            name_y = card_y + 115
+        for line in textwrap.wrap(_clean(to_club), width=16)[:2]:
+            draw.text((to_x + card_w // 2, name_y), line, font=font_club,
+                      fill=C["text_primary"], anchor="mm")
+            name_y += 40
+
+        # Arrow badge between the two cards (drawn, not text — always renders cleanly)
+        arrow_r = 42
+        ax, ay = w // 2, card_y + card_h // 2
+        draw.ellipse([(ax - arrow_r, ay - arrow_r), (ax + arrow_r, ay + arrow_r)],
+                      fill=C["accent_gold"])
+        shaft_w, shaft_h = 36, 10
+        draw.rectangle(
+            [(ax - shaft_w, ay - shaft_h // 2), (ax + shaft_w // 3, ay + shaft_h // 2)],
+            fill=C["bg_dark"]
+        )
+        head = [
+            (ax + shaft_w // 3 - 4, ay - 18),
+            (ax + shaft_w // 3 - 4, ay + 18),
+            (ax + shaft_w // 3 + 22, ay),
+        ]
+        draw.polygon(head, fill=C["bg_dark"])
+
+        y = card_y + card_h + 60
+
+    # ── Fee panel ──
+    fee_w, fee_h = 460, 130
+    fee_x = (w - fee_w) // 2
+    draw.rounded_rectangle([(fee_x, y), (fee_x + fee_w, y + fee_h)], radius=16, fill=C["accent_gold"])
+    draw.text((w // 2, y + 35), "TRANSFER FEE", font=font_fee_lbl, fill=C["bg_dark"], anchor="mm")
+    draw.text((w // 2, y + 85), _clean(fee).upper(), font=font_fee, fill=C["bg_dark"], anchor="mm")
+    y += fee_h + 70
+
+    _draw_divider(draw, y, w)
+    y += 45
+    draw.text((w // 2, y), "FOOTBALL PULSE \u2022 TRANSFER CENTRE", font=_load_font(28, True),
+              fill=C["accent_gold"], anchor="mm")
 
     _draw_divider(draw, h - 90, w)
     _draw_branding(draw, w, h - 50)
+
     return _save(img, f"transfer_{player_name.replace(' ', '_')}")
 
 
