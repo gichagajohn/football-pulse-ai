@@ -1,0 +1,19 @@
+[Unit]
+Description=Football Pulse AI — Automated Football Media System
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/football_pulse_ai
+ExecStart=/home/ubuntu/football_pulse_ai/venv/bin/python main.py
+Restart=always
+RestartSec=15
+StandardOutput=append:/home/ubuntu/football_pulse_ai/logs/service.log
+StandardError=append:/home/ubuntu/football_pulse_ai/logs/service_error.log
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
