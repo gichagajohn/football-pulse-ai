@@ -277,15 +277,44 @@ def generate_with_gemini(prompt: str) -> Optional[str]:
                     }]
                 }],
                 "generationConfig": {
-                    "maxOutputTokens": 300,
+                    "maxOutputTokens": 550,
                     "temperature": 0.85,
                 }
             },
             timeout=20,
         )
         data = resp.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return text.strip()
+
+        candidates = data.get("candidates")
+        if not candidates:
+            logger.warning(
+                "Gemini returned no candidates (prompt_feedback=%s) - falling back to template.",
+                data.get("prompt_feedback")
+            )
+            return None
+
+        candidate = candidates[0]
+        finish_reason = candidate.get("finishReason", "")
+        if finish_reason not in ("STOP",):
+            logger.warning(
+                "Gemini generation incomplete (finishReason=%s) - falling back to template.",
+                finish_reason
+            )
+            return None
+
+        parts = candidate.get("content", {}).get("parts", [])
+        if not parts or not parts[0].get("text"):
+            logger.warning("Gemini returned empty content - falling back to template.")
+            return None
+
+        text = parts[0]["text"].strip()
+
+        # Backstop: reject anything suspiciously short even if finishReason said STOP
+        if len(text) < 40:
+            logger.warning("Gemini caption too short (%d chars) - falling back to template.", len(text))
+            return None
+
+        return text
     except Exception as e:
         logger.warning("Gemini generation failed: %s - falling back to template.", e)
         return None
