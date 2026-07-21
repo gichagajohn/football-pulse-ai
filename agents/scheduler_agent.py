@@ -1,6 +1,6 @@
 """
 agents/scheduler_agent.py — Football Pulse AI
-Orchestrates all recurring jobs.
+Orchestrates all recurring jobs. Text-only posts — no poster generation.
 Match state is persisted in the match_state DB table so goal/fulltime
 detection works correctly across GitHub Actions runs.
 """
@@ -45,12 +45,11 @@ def _save_state(match_id: str, home: int, away: int, status: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Live match handling
+# Live match handling — text-only
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _handle_goal(match: dict, home_score: int, away_score: int) -> None:
     try:
-        from agents import poster_design_agent as poster
         from agents import caption_agent
         from agents import publisher_agent
         from agents.content_decision_agent import should_post, record_post
@@ -66,22 +65,16 @@ def _handle_goal(match: dict, home_score: int, away_score: int) -> None:
         away   = match.get("awayTeam", {}).get("name", "Away")
         minute = match.get("minute", 90)
 
-        poster_path = poster.create_goal_alert(
-            home_team=home, away_team=away,
-            home_score=home_score, away_score=away_score,
-            scorer="", minute=minute, competition=competition,
-        )
-        # Correct signature: scorer, team, home_team, away_team, home_score, away_score, minute, competition
         cap = caption_agent.generate_goal_caption(
             scorer="", team=home,
             home_team=home, away_team=away,
             home_score=home_score, away_score=away_score,
             minute=minute, competition=competition,
         )
-        db_id = publisher_agent.create_post_record(0, poster_path, cap)
-        fb_id = publisher_agent.publish(poster_path, cap, post_id_db=db_id)
+        db_id = publisher_agent.create_post_record(0, "", cap)
+        fb_id = publisher_agent.publish(None, cap, post_id_db=db_id)
         record_post("GOAL", key, competition, fb_id)
-        log.info("Goal posted: %s %d-%d", mid, home_score, away_score)
+        log.info("Goal posted: %s %d-%d (%s)", mid, home_score, away_score, competition)
 
     except Exception as e:
         log.error("_handle_goal error: %s", e)
@@ -89,7 +82,6 @@ def _handle_goal(match: dict, home_score: int, away_score: int) -> None:
 
 def _handle_fulltime(match: dict, home_score: int, away_score: int) -> None:
     try:
-        from agents import poster_design_agent as poster
         from agents import caption_agent
         from agents import publisher_agent
         from agents.content_decision_agent import should_post, record_post
@@ -104,21 +96,15 @@ def _handle_fulltime(match: dict, home_score: int, away_score: int) -> None:
         home = match.get("homeTeam", {}).get("name", "Home")
         away = match.get("awayTeam", {}).get("name", "Away")
 
-        poster_path = poster.create_fulltime(
-            home_team=home, away_team=away,
-            home_score=home_score, away_score=away_score,
-            competition=competition,
-        )
-        # Correct signature: home_team, away_team, home_score, away_score, competition, goals=None
         cap = caption_agent.generate_fulltime_caption(
             home_team=home, away_team=away,
             home_score=home_score, away_score=away_score,
             competition=competition,
         )
-        db_id = publisher_agent.create_post_record(0, poster_path, cap)
-        fb_id = publisher_agent.publish(poster_path, cap, post_id_db=db_id)
+        db_id = publisher_agent.create_post_record(0, "", cap)
+        fb_id = publisher_agent.publish(None, cap, post_id_db=db_id)
         record_post("FULLTIME", key, competition, fb_id)
-        log.info("Full-time posted: %s %d-%d", mid, home_score, away_score)
+        log.info("Full-time posted: %s %d-%d (%s)", mid, home_score, away_score, competition)
 
     except Exception as e:
         log.error("_handle_fulltime error: %s", e)
@@ -128,7 +114,7 @@ def check_live_matches() -> None:
     try:
         from agents.football_data_agent import get_live_matches
         matches = get_live_matches()
-        log.info("Live matches fetched: %d", len(matches))
+        log.info("Live matches to process: %d", len(matches))
     except Exception as e:
         log.error("check_live_matches fetch error: %s", e)
         return
@@ -136,24 +122,29 @@ def check_live_matches() -> None:
     for match in matches:
         try:
             mid        = str(match.get("id", ""))
-            ft         = match.get("score", {}).get("fullTime", {})
-            home_score = ft.get("home") or 0
-            away_score = ft.get("away") or 0
+            score      = match.get("score", {})
+            ft         = score.get("fullTime", {})
+            ht         = score.get("halfTime", {})
+            home_score = ft.get("home") or ht.get("home") or 0
+            away_score = ft.get("away") or ht.get("away") or 0
             status     = match.get("status", "")
+            competition = match.get("competition", {}).get("name", "Unknown")
 
             prev = _get_prev_state(mid)
 
             if prev is None:
-                log.info("New match baseline: %s (status=%s %d-%d)", mid, status, home_score, away_score)
+                log.info("New match baseline: %s [%s] %s %d-%d",
+                         mid, competition, status, home_score, away_score)
                 _save_state(mid, home_score, away_score, status)
                 continue
 
             if home_score + away_score > prev["home"] + prev["away"]:
-                log.info("Goal detected: %s %d-%d (was %d-%d)", mid, home_score, away_score, prev["home"], prev["away"])
+                log.info("GOAL detected [%s]: %s %d-%d (was %d-%d)",
+                         competition, mid, home_score, away_score, prev["home"], prev["away"])
                 _handle_goal(match, home_score, away_score)
 
             if status in ("FINISHED", "FT") and prev["status"] not in ("FINISHED", "FT"):
-                log.info("Full-time detected: %s %d-%d", mid, home_score, away_score)
+                log.info("FULL TIME [%s]: %s %d-%d", competition, mid, home_score, away_score)
                 _handle_fulltime(match, home_score, away_score)
 
             _save_state(mid, home_score, away_score, status)
@@ -163,13 +154,12 @@ def check_live_matches() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Fixtures
+# Fixtures — text-only
 # ─────────────────────────────────────────────────────────────────────────────
 
 def post_todays_fixtures() -> None:
     try:
         from agents.football_data_agent import get_todays_fixtures
-        from agents import poster_design_agent as poster
         from agents import caption_agent
         from agents import publisher_agent
         from agents.content_decision_agent import should_post, record_post, is_duplicate
@@ -189,37 +179,37 @@ def post_todays_fixtures() -> None:
         if not should_post("FIXTURE_POST", "default", dedup_key=dedup_key):
             return
 
-        fixture_list = [
-            {
-                "home_team":    f.get("homeTeam", {}).get("name", ""),
-                "away_team":    f.get("awayTeam", {}).get("name", ""),
-                "kickoff_time": f.get("utcDate", "TBC")[:16].replace("T", " "),
-                "competition":  f.get("competition", {}).get("name", ""),
-            }
-            for f in fixtures[:10]
-        ]
+        # Group by competition so the post is readable
+        by_comp: dict[str, list] = {}
+        for f in fixtures[:15]:
+            comp = f.get("competition", {}).get("name", "Football")
+            home = f.get("homeTeam", {}).get("name", "")
+            away = f.get("awayTeam", {}).get("name", "")
+            kt   = f.get("utcDate", "TBC")[:16].replace("T", " ") + " UTC"
+            by_comp.setdefault(comp, []).append(f"{home} vs {away}  |  {kt}")
 
-        poster_path = poster.create_todays_fixtures(fixture_list)
+        lines = [f"MATCHDAY - {today}\n"]
+        for comp, games in by_comp.items():
+            lines.append(f"-- {comp.upper()} --")
+            lines.extend(games)
+            lines.append("")
 
-        # Build caption manually — generate_fixtures_caption doesn't exist in caption_agent
-        lines = ["📅 TODAY'S FIXTURES\n"]
-        for fix in fixture_list:
-            lines.append(f"{fix['home_team']} vs {fix['away_team']} | {fix['kickoff_time']}")
-        lines.append("\nWho are you watching today? 👇")
-        lines.append("\n#Football #FootballPulse #Fixtures #Soccer")
-        cap = "\n".join(lines)
+        lines.append("Who are you watching today? Drop your score predictions below!")
+        lines.append("\n#Football #FootballPulse #Fixtures #Soccer #WorldCup2026")
+        cap = "\n".join(lines).strip()
 
-        db_id = publisher_agent.create_post_record(0, poster_path, cap)
-        fb_id = publisher_agent.publish(poster_path, cap, post_id_db=db_id)
+        db_id = publisher_agent.create_post_record(0, "", cap)
+        fb_id = publisher_agent.publish(None, cap, post_id_db=db_id)
         record_post("FIXTURE_POST", dedup_key, "default", fb_id)
-        log.info("Fixtures posted: %d matches", len(fixture_list))
+        log.info("Fixtures posted: %d matches across %d competitions",
+                 len(fixtures), len(by_comp))
 
     except Exception as e:
         log.error("post_todays_fixtures: %s", e)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Football fact
+# Football fact — text-only
 # ─────────────────────────────────────────────────────────────────────────────
 
 FOOTBALL_FACTS = [
@@ -238,17 +228,20 @@ FOOTBALL_FACTS = [
     "The first football club in the world is Sheffield FC, founded in 1857.",
     "Zinedine Zidane won the World Cup, Champions League, and Ballon d'Or.",
     "Paolo Maldini played his entire 25-year career at AC Milan.",
+    "The 2026 FIFA World Cup is the first to be hosted by three nations — USA, Canada, and Mexico.",
+    "The 2026 World Cup expanded to 48 teams for the first time in tournament history.",
+    "Argentina are the reigning World Cup champions after winning the 2022 tournament in Qatar.",
+    "Morocco became the first African nation to reach a World Cup semi-final, at Qatar 2022.",
+    "Kylian Mbappé became only the second player after Pelé to score in two World Cup finals.",
 ]
 
 
 def post_football_fact() -> None:
     try:
-        from agents import poster_design_agent as poster
         from agents import caption_agent
         from agents import publisher_agent
         from agents.content_decision_agent import should_post, record_post, is_duplicate
 
-        # Pick a fact not recently posted
         chosen_fact = None
         chosen_key  = None
         for fact in random.sample(FOOTBALL_FACTS, len(FOOTBALL_FACTS)):
@@ -265,11 +258,9 @@ def post_football_fact() -> None:
         if not should_post("FOOTBALL_FACT", "default", dedup_key=chosen_key):
             return
 
-        poster_path = poster.create_football_fact(chosen_fact, category="DID YOU KNOW?", emoji="🧠")
-        # generate_fact_caption exists in caption_agent
         cap = caption_agent.generate_fact_caption(chosen_fact)
-        db_id = publisher_agent.create_post_record(0, poster_path, cap)
-        fb_id = publisher_agent.publish(poster_path, cap, post_id_db=db_id)
+        db_id = publisher_agent.create_post_record(0, "", cap)
+        fb_id = publisher_agent.publish(None, cap, post_id_db=db_id)
         record_post("FOOTBALL_FACT", chosen_key, "default", fb_id)
         log.info("Fact posted.")
 
@@ -278,7 +269,7 @@ def post_football_fact() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# On This Day
+# On This Day — text-only
 # ─────────────────────────────────────────────────────────────────────────────
 
 ON_THIS_DAY_EVENTS = [
@@ -290,12 +281,13 @@ ON_THIS_DAY_EVENTS = [
     {"date": "05-29", "text": "In 1985, the Heysel Stadium disaster claimed 39 lives before the European Cup final."},
     {"date": "04-15", "text": "In 1989, the Hillsborough disaster resulted in 97 Liverpool supporters losing their lives."},
     {"date": "05-26", "text": "In 1999, Manchester United won the treble with a dramatic injury-time comeback against Bayern Munich."},
+    {"date": "07-15", "text": "In 2018, France won the FIFA World Cup in Russia, beating Croatia 4-2 in the final."},
+    {"date": "07-18", "text": "In 2026, Argentina face their first World Cup knockout match as defending champions."},
 ]
 
 
 def post_on_this_day() -> None:
     try:
-        from agents import poster_design_agent as poster
         from agents import caption_agent
         from agents import publisher_agent
         from agents.content_decision_agent import should_post, record_post, is_duplicate
@@ -317,10 +309,9 @@ def post_on_this_day() -> None:
         if not should_post("ON_THIS_DAY", "default", dedup_key=key):
             return
 
-        poster_path = poster.create_football_fact(event["text"], category="ON THIS DAY", emoji="📅")
         cap = caption_agent.generate_fact_caption(f"On This Day: {event['text']}")
-        db_id = publisher_agent.create_post_record(0, poster_path, cap)
-        fb_id = publisher_agent.publish(poster_path, cap, post_id_db=db_id)
+        db_id = publisher_agent.create_post_record(0, "", cap)
+        fb_id = publisher_agent.publish(None, cap, post_id_db=db_id)
         record_post("ON_THIS_DAY", key, "default", fb_id)
         log.info("OTD posted: %s", today)
 
