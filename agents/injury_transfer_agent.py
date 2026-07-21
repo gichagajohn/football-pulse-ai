@@ -43,9 +43,13 @@ KNOWN_CLUBS = [
 ]
 
 
+def _looks_like_club(candidate: str) -> bool:
+    cand_low = candidate.lower()
+    return any(cand_low == c.lower() or c.lower() in cand_low for c in KNOWN_CLUBS)
+
+
 def _extract_player_and_clubs(title: str, summary: str) -> tuple:
     text = f"{title} {summary}"
-
     found_clubs = [c for c in KNOWN_CLUBS if c.lower() in text.lower()]
 
     player = ""
@@ -55,7 +59,9 @@ def _extract_player_and_clubs(title: str, summary: str) -> tuple:
         title
     )
     if player_match:
-        player = player_match.group(1).strip()
+        candidate = player_match.group(1).strip()
+        if not _looks_like_club(candidate):
+            player = candidate
 
     if not player or len(player) < 3:
         words = title.split()
@@ -66,27 +72,38 @@ def _extract_player_and_clubs(title: str, summary: str) -> tuple:
                 cap_words.append(clean)
             else:
                 break
-        player = " ".join(cap_words[:2]) if cap_words else "Player TBC"
+        candidate = " ".join(cap_words[:2]) if cap_words else "Player TBC"
+        player = candidate if not _looks_like_club(candidate) else "Player TBC"
 
     from_club = found_clubs[0] if len(found_clubs) >= 2 else "Unknown"
     to_club   = found_clubs[1] if len(found_clubs) >= 2 else (found_clubs[0] if found_clubs else "Unknown")
 
+    # NOTE: (?i:...) scopes case-insensitivity to the keyword group ONLY.
+    # Previously a trailing re.IGNORECASE flag on the whole pattern silently
+    # disabled the [A-Z] capital-letter check, letting lowercase verb
+    # fragments (e.g. "sign Garnacho") get captured as club names.
     to_match = re.search(
-        r"(?:to|joins?|heading to|move to|signs? for)\s+([A-Z][a-zA-Z\s]{2,25})(?:\s+for|\s+on|\.|,|$)",
-        title, re.IGNORECASE
+        r"(?i:to|joins?|heading to|move to|signs? for)\s+([A-Z][a-zA-Z\s]{2,25}?)(?:\s+for|\s+on|\.|,|$)",
+        title
     )
     from_match = re.search(
-        r"(?:from|leaves?|departing)\s+([A-Z][a-zA-Z\s]{2,25})(?:\s+to|\s+for|\.|,|$)",
-        title, re.IGNORECASE
+        r"(?i:from|leaves?|departing)\s+([A-Z][a-zA-Z\s]{2,25}?)(?:\s+to|\s+for|\.|,|$)",
+        title
     )
 
     if to_match:
         cand = to_match.group(1).strip()
-        to_club = next((c for c in KNOWN_CLUBS if c.lower() in cand.lower()), cand if len(cand) < 25 else to_club)
+        matched = next((c for c in KNOWN_CLUBS if c.lower() in cand.lower()), None)
+        if matched:
+            to_club = matched
+        elif cand and cand.split()[0].istitle() and len(cand) < 25:
+            to_club = cand
 
     if from_match:
         cand = from_match.group(1).strip()
-        from_club = next((c for c in KNOWN_CLUBS if c.lower() in cand.lower()), cand if len(cand) < 25 else from_club)
+        matched = next((c for c in KNOWN_CLUBS if c.lower() in cand.lower()), None)
+        if matched:
+            from_club = matched
 
     return player or "Player TBC", from_club, to_club
 
@@ -106,6 +123,7 @@ def _article_hash(url: str) -> str:
 def scan_for_news():
     logger.debug("Scanning RSS feeds...")
     processed = 0
+    skipped_low_confidence = 0
 
     for feed_url in settings.RSS_FEEDS:
         try:
@@ -130,6 +148,18 @@ def scan_for_news():
                     player, from_club, to_club = _extract_player_and_clubs(title, summary)
                     fee = _extract_fee(text)
                     logger.info("Extracted: player=%s from=%s to=%s", player, from_club, to_club)
+
+                    # Confidence gate: don't publish a guess. If we couldn't
+                    # confidently pull a real player name (not a club) or a
+                    # destination club, skip the post entirely rather than
+                    # publish garbled/wrong info.
+                    if player == "Player TBC" or to_club == "Unknown":
+                        logger.warning(
+                            "Skipping low-confidence transfer post: %s", title[:80]
+                        )
+                        skipped_low_confidence += 1
+                        continue
+
                     try:
                         cap = caption_agent.generate_transfer_caption(player, from_club, to_club, fee)
                         db_id = publisher_agent.create_post_record(0, "", cap)
@@ -159,5 +189,8 @@ def scan_for_news():
                     except Exception as e:
                         logger.error("Injury post failed: %s", e)
 
-    logger.info("News scan complete. %d posts generated.", processed)
+    logger.info(
+        "News scan complete. %d posts generated, %d skipped for low confidence.",
+        processed, skipped_low_confidence
+    )
     return processed
