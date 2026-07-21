@@ -127,10 +127,14 @@ def _rebuild_posts_if_needed(conn: sqlite3.Connection) -> None:
                 );
 
                 INSERT OR IGNORE INTO posts
-                    (id, content_hash, content_type, competition, fb_post_id, posted_at, likes, comments, shares)
+                    (id, event_id, poster_path, caption_text, hashtags, platform, status,
+                     content_hash, content_type, competition, fb_post_id, ig_post_id,
+                     error_message, likes, comments, shares, posted_at, published_at)
                 SELECT
-                    id, content_hash, content_type, competition, fb_post_id,
-                    COALESCE(posted_at, datetime('now')), COALESCE(likes,0), COALESCE(comments,0), COALESCE(shares,0)
+                    id, event_id, poster_path, caption_text, hashtags, platform, status,
+                    content_hash, content_type, competition, fb_post_id, ig_post_id,
+                    error_message, COALESCE(likes,0), COALESCE(comments,0), COALESCE(shares,0),
+                    COALESCE(posted_at, datetime('now')), published_at
                 FROM posts_old;
 
                 DROP TABLE posts_old;
