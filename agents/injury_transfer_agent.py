@@ -44,13 +44,40 @@ KNOWN_CLUBS = [
 
 
 def _looks_like_club(candidate: str) -> bool:
-    cand_low = candidate.lower()
-    return any(cand_low == c.lower() or c.lower() in cand_low for c in KNOWN_CLUBS)
+    """
+    True if `candidate` is (or is part of) a known club name.
+    Checks both directions: candidate could be the full club name,
+    or a short form / partial mention of it (e.g. "Villa" -> "Aston Villa").
+    """
+    cand_low = candidate.lower().strip()
+    if not cand_low:
+        return False
+    for c in KNOWN_CLUBS:
+        c_low = c.lower()
+        if cand_low == c_low or cand_low in c_low or c_low in cand_low:
+            return True
+    return False
+
+
+def _clubs_in_text_order(text: str) -> list:
+    """
+    Return known clubs mentioned in `text`, ordered by where they first
+    appear in the text (not by their position in KNOWN_CLUBS) — so
+    from/to assignment reflects the actual sentence, not list order.
+    """
+    text_low = text.lower()
+    found = []
+    for c in KNOWN_CLUBS:
+        idx = text_low.find(c.lower())
+        if idx != -1:
+            found.append((idx, c))
+    found.sort(key=lambda pair: pair[0])
+    return [c for _, c in found]
 
 
 def _extract_player_and_clubs(title: str, summary: str) -> tuple:
     text = f"{title} {summary}"
-    found_clubs = [c for c in KNOWN_CLUBS if c.lower() in text.lower()]
+    found_clubs = _clubs_in_text_order(text)
 
     player = ""
     player_match = re.match(
