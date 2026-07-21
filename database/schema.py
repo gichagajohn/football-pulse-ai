@@ -96,53 +96,76 @@ def _rebuild_posts_if_needed(conn: sqlite3.Connection) -> None:
     """
     # Check if content_hash has notnull=1
     cols = conn.execute("PRAGMA table_info(posts)").fetchall()
-    for col in cols:
-        # col: (cid, name, type, notnull, dflt_value, pk)
-        if col[1] == "content_hash" and col[3] == 1:
-            logger.info("Rebuilding posts table to remove NOT NULL on content_hash...")
-            conn.executescript("""
-                PRAGMA foreign_keys=OFF;
+    needs_rebuild = any(col[1] == "content_hash" and col[3] == 1 for col in cols)
+    if not needs_rebuild:
+        return
 
-                ALTER TABLE posts RENAME TO posts_old;
+    logger.info("Rebuilding posts table to remove NOT NULL on content_hash...")
 
-                CREATE TABLE posts (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_id        INTEGER DEFAULT 0,
-                    poster_path     TEXT,
-                    caption_text    TEXT,
-                    hashtags        TEXT    DEFAULT '',
-                    platform        TEXT    DEFAULT 'facebook',
-                    status          TEXT    DEFAULT 'pending',
-                    content_hash    TEXT,
-                    content_type    TEXT,
-                    competition     TEXT,
-                    fb_post_id      TEXT,
-                    ig_post_id      TEXT,
-                    error_message   TEXT,
-                    likes           INTEGER DEFAULT 0,
-                    comments        INTEGER DEFAULT 0,
-                    shares          INTEGER DEFAULT 0,
-                    posted_at       DATETIME DEFAULT (datetime('now')),
-                    published_at    DATETIME
-                );
+    # Figure out which columns actually exist in the old table —
+    # it may predate event_id/caption_text/status/etc, so we can't
+    # assume the full POSTS_COLUMNS set is present.
+    old_cols = {row[1] for row in conn.execute("PRAGMA table_info(posts)").fetchall()}
 
-                INSERT OR IGNORE INTO posts
-                    (id, event_id, poster_path, caption_text, hashtags, platform, status,
-                     content_hash, content_type, competition, fb_post_id, ig_post_id,
-                     error_message, likes, comments, shares, posted_at, published_at)
-                SELECT
-                    id, event_id, poster_path, caption_text, hashtags, platform, status,
-                    content_hash, content_type, competition, fb_post_id, ig_post_id,
-                    error_message, COALESCE(likes,0), COALESCE(comments,0), COALESCE(shares,0),
-                    COALESCE(posted_at, datetime('now')), published_at
-                FROM posts_old;
+    # Every column the new table wants, in a fixed order (id first).
+    new_table_columns = [
+        "id", "event_id", "poster_path", "caption_text", "hashtags",
+        "platform", "status", "content_hash", "content_type", "competition",
+        "fb_post_id", "ig_post_id", "error_message", "likes", "comments",
+        "shares", "posted_at", "published_at",
+    ]
 
-                DROP TABLE posts_old;
+    # Columns we can actually pull from posts_old (id always exists).
+    copyable = [c for c in new_table_columns if c == "id" or c in old_cols]
 
-                PRAGMA foreign_keys=ON;
-            """)
-            logger.info("posts table rebuilt successfully.")
-            return
+    # Build SELECT expressions with sane defaults for numeric/date columns.
+    select_exprs = []
+    for c in copyable:
+        if c in ("likes", "comments", "shares"):
+            select_exprs.append(f"COALESCE({c},0)")
+        elif c == "posted_at":
+            select_exprs.append("COALESCE(posted_at, datetime('now'))")
+        else:
+            select_exprs.append(c)
+
+    columns_sql = ", ".join(copyable)
+    select_sql = ", ".join(select_exprs)
+
+    conn.executescript(f"""
+        PRAGMA foreign_keys=OFF;
+
+        ALTER TABLE posts RENAME TO posts_old;
+
+        CREATE TABLE posts (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id        INTEGER DEFAULT 0,
+            poster_path     TEXT,
+            caption_text    TEXT,
+            hashtags        TEXT    DEFAULT '',
+            platform        TEXT    DEFAULT 'facebook',
+            status          TEXT    DEFAULT 'pending',
+            content_hash    TEXT,
+            content_type    TEXT,
+            competition     TEXT,
+            fb_post_id      TEXT,
+            ig_post_id      TEXT,
+            error_message   TEXT,
+            likes           INTEGER DEFAULT 0,
+            comments        INTEGER DEFAULT 0,
+            shares          INTEGER DEFAULT 0,
+            posted_at       DATETIME DEFAULT (datetime('now')),
+            published_at    DATETIME
+        );
+
+        INSERT OR IGNORE INTO posts ({columns_sql})
+        SELECT {select_sql}
+        FROM posts_old;
+
+        DROP TABLE posts_old;
+
+        PRAGMA foreign_keys=ON;
+    """)
+    logger.info("posts table rebuilt successfully. Copied columns: %s", copyable)
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
