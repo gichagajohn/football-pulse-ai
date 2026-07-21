@@ -17,32 +17,97 @@ logger = setup_logger("data_agent")
 FD_BASE  = "https://api.football-data.org/v4"
 SDB_BASE = "https://www.thesportsdb.com/api/v1/json"
 
+# ── All competition codes we care about (football-data.org codes) ──────────
+# Free tier covers: PL, PD, BL1, SA, FL1, DED, PPL, CL, EC, WC
+WATCHED_COMPETITIONS = [
+    "WC",   # FIFA World Cup  ← this was missing entirely
+    "CL",   # UEFA Champions League
+    "PL",   # Premier League
+    "PD",   # La Liga
+    "BL1",  # Bundesliga
+    "SA",   # Serie A
+    "FL1",  # Ligue 1
+    "EC",   # European Championship
+]
+
 
 def _fd_headers() -> dict:
     return {"X-Auth-Token": settings.FOOTBALL_DATA_API_KEY}
 
 
 def get_live_matches() -> list[dict]:
-    """Return matches currently in progress from football-data.org."""
+    """
+    Return matches currently in progress.
+    Queries each watched competition separately because the free tier
+    /matches?status=IN_PLAY endpoint often misses tournaments like the World Cup.
+    """
+    all_matches = []
+
+    # First try the global endpoint
     data = get_json(f"{FD_BASE}/matches", params={"status": "IN_PLAY"}, headers=_fd_headers())
-    if not data:
-        return []
-    matches = data.get("matches", [])
-    logger.info("Live matches fetched: %d", len(matches))
-    return matches
+    if data:
+        all_matches.extend(data.get("matches", []))
+
+    # Then explicitly poll each key competition so World Cup is never missed
+    seen_ids = {str(m.get("id")) for m in all_matches}
+    for code in WATCHED_COMPETITIONS:
+        try:
+            comp_data = get_json(
+                f"{FD_BASE}/competitions/{code}/matches",
+                params={"status": "IN_PLAY"},
+                headers=_fd_headers(),
+            )
+            if comp_data:
+                for m in comp_data.get("matches", []):
+                    mid = str(m.get("id"))
+                    if mid not in seen_ids:
+                        all_matches.append(m)
+                        seen_ids.add(mid)
+        except Exception as e:
+            logger.warning("Live match fetch failed for %s: %s", code, e)
+
+    logger.info("Live matches fetched: %d", len(all_matches))
+    return all_matches
 
 
 def get_todays_fixtures() -> list[dict]:
-    """Return today's scheduled matches."""
+    """Return today's scheduled matches across all watched competitions."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    all_fixtures = []
+    seen_ids = set()
+
+    # Global endpoint first
     data = get_json(
         f"{FD_BASE}/matches",
         params={"dateFrom": today, "dateTo": today},
-        headers=_fd_headers()
+        headers=_fd_headers(),
     )
-    if not data:
-        return []
-    return data.get("matches", [])
+    if data:
+        for m in data.get("matches", []):
+            mid = str(m.get("id"))
+            if mid not in seen_ids:
+                all_fixtures.append(m)
+                seen_ids.add(mid)
+
+    # Then per-competition so World Cup fixtures always appear
+    for code in WATCHED_COMPETITIONS:
+        try:
+            comp_data = get_json(
+                f"{FD_BASE}/competitions/{code}/matches",
+                params={"dateFrom": today, "dateTo": today},
+                headers=_fd_headers(),
+            )
+            if comp_data:
+                for m in comp_data.get("matches", []):
+                    mid = str(m.get("id"))
+                    if mid not in seen_ids:
+                        all_fixtures.append(m)
+                        seen_ids.add(mid)
+        except Exception as e:
+            logger.warning("Fixture fetch failed for %s: %s", code, e)
+
+    logger.info("Today's fixtures fetched: %d", len(all_fixtures))
+    return all_fixtures
 
 
 def get_standings(competition_code: str) -> Optional[dict]:
@@ -147,18 +212,18 @@ def normalise_match(raw: dict) -> dict:
     half = score.get("halfTime", {})
 
     return {
-        "match_id":       str(raw.get("id", "")),
-        "competition":    competition.get("name", "Unknown"),
-        "home_team":      home.get("name", "Home"),
-        "away_team":      away.get("name", "Away"),
-        "home_score":     full.get("home") or half.get("home") or 0,
-        "away_score":     full.get("away") or half.get("away") or 0,
-        "status":         raw.get("status", ""),
-        "minute":         raw.get("minute"),
-        "utc_date":       raw.get("utcDate", ""),
-        "venue":          raw.get("venue", ""),
-        "referees":       raw.get("referees", []),
-        "raw":            json.dumps(raw),
+        "match_id":    str(raw.get("id", "")),
+        "competition": competition.get("name", "Unknown"),
+        "home_team":   home.get("name", "Home"),
+        "away_team":   away.get("name", "Away"),
+        "home_score":  full.get("home") or half.get("home") or 0,
+        "away_score":  full.get("away") or half.get("away") or 0,
+        "status":      raw.get("status", ""),
+        "minute":      raw.get("minute"),
+        "utc_date":    raw.get("utcDate", ""),
+        "venue":       raw.get("venue", ""),
+        "referees":    raw.get("referees", []),
+        "raw":         json.dumps(raw),
     }
 
 
@@ -166,9 +231,9 @@ def normalise_scorer(raw: dict) -> dict:
     player = raw.get("player", {})
     team   = raw.get("team", {})
     return {
-        "player_name":  player.get("name", "Unknown"),
-        "team":         team.get("name", "Unknown"),
-        "goals":        raw.get("goals", 0),
-        "assists":      raw.get("assists", 0),
-        "penalties":    raw.get("penalties", 0),
+        "player_name": player.get("name", "Unknown"),
+        "team":        team.get("name", "Unknown"),
+        "goals":       raw.get("goals", 0),
+        "assists":     raw.get("assists", 0),
+        "penalties":   raw.get("penalties", 0),
     }
