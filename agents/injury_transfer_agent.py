@@ -147,6 +147,15 @@ def _article_hash(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()[:12]
 
 
+def _story_key(player: str, to_club: str) -> str:
+    """
+    Semantic dedup key for a transfer story — same player + destination
+    club counts as the same story even if two different articles (and
+    therefore two different URLs/art_ids) cover it.
+    """
+    return f"{player.strip().lower()}|{to_club.strip().lower()}"
+
+
 def scan_for_news():
     logger.debug("Scanning RSS feeds...")
     processed = 0
@@ -166,9 +175,6 @@ def scan_for_news():
             text    = f"{title} {summary}"
             art_id  = _article_hash(link)
 
-            if decision.is_duplicate("RSS_ARTICLE", art_id):
-                continue
-
             if TRANSFER_KEYWORDS.search(text):
                 logger.info("Transfer article detected: %s", title[:80])
                 if decision.should_post("TRANSFER_ALERT", "default", dedup_key=art_id):
@@ -187,11 +193,22 @@ def scan_for_news():
                         skipped_low_confidence += 1
                         continue
 
+                    # Semantic dedup: two different articles/URLs about the
+                    # same player+destination should only post once.
+                    story_key = _story_key(player, to_club)
+                    if decision.is_duplicate("TRANSFER_ALERT_STORY", story_key):
+                        logger.info(
+                            "Skipping duplicate transfer story (already posted): %s to %s",
+                            player, to_club
+                        )
+                        continue
+
                     try:
                         cap = caption_agent.generate_transfer_caption(player, from_club, to_club, fee)
                         db_id = publisher_agent.create_post_record(0, "", cap)
                         fb_id = publisher_agent.publish(None, cap, post_id_db=db_id)
                         decision.record_post("TRANSFER_ALERT", art_id, "default", fb_id)
+                        decision.record_post("TRANSFER_ALERT_STORY", story_key, "default", fb_id)
                         processed += 1
                         logger.info("Transfer text post published: %s", fb_id)
                     except Exception as e:
