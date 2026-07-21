@@ -37,6 +37,13 @@ def publish_to_facebook(
         logger.warning("Facebook credentials not configured. Skipping FB publish.")
         return None
 
+    # Last-resort sanity check — catches empty/truncated captions from any
+    # generator, not just caption_agent.py's own Gemini path.
+    if not caption or len(caption.strip()) < 40:
+        logger.error("Refusing to publish suspiciously short/empty caption: %r", caption)
+        _mark_failed(post_id_db, "Caption failed pre-publish validation (empty or too short)")
+        return None
+
     import requests
 
     try:
