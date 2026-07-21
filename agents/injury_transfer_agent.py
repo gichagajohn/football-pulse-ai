@@ -1,6 +1,7 @@
 """
 agents/injury_transfer_agent.py — Football Pulse AI
 Monitors RSS feeds for transfer and injury news.
+Posts text-only to Facebook — no poster generation.
 """
 
 import re
@@ -12,7 +13,6 @@ import feedparser
 import settings
 from utils.logger import setup_logger
 from agents import content_decision_agent as decision
-from agents import poster_design_agent    as poster
 from agents import caption_agent
 from agents import publisher_agent
 
@@ -46,10 +46,8 @@ KNOWN_CLUBS = [
 def _extract_player_and_clubs(title: str, summary: str) -> tuple:
     text = f"{title} {summary}"
 
-    # Find known clubs mentioned
     found_clubs = [c for c in KNOWN_CLUBS if c.lower() in text.lower()]
 
-    # Extract player: first capitalized words before a transfer verb
     player = ""
     player_match = re.match(
         r"^([A-Z][a-zA-Z\-\']+(?:\s+[A-Z][a-zA-Z\-\']+){0,3})\s+"
@@ -70,11 +68,9 @@ def _extract_player_and_clubs(title: str, summary: str) -> tuple:
                 break
         player = " ".join(cap_words[:2]) if cap_words else "Player TBC"
 
-    # Default club assignment
     from_club = found_clubs[0] if len(found_clubs) >= 2 else "Unknown"
     to_club   = found_clubs[1] if len(found_clubs) >= 2 else (found_clubs[0] if found_clubs else "Unknown")
 
-    # Refine with directional patterns
     to_match = re.search(
         r"(?:to|joins?|heading to|move to|signs? for)\s+([A-Z][a-zA-Z\s]{2,25})(?:\s+for|\s+on|\.|,|$)",
         title, re.IGNORECASE
@@ -135,15 +131,12 @@ def scan_for_news():
                     fee = _extract_fee(text)
                     logger.info("Extracted: player=%s from=%s to=%s", player, from_club, to_club)
                     try:
-                        poster_path = poster.create_transfer_alert(
-                            player_name=player, from_club=from_club,
-                            to_club=to_club, fee=fee,
-                        )
                         cap = caption_agent.generate_transfer_caption(player, from_club, to_club, fee)
-                        db_id = publisher_agent.create_post_record(0, poster_path, cap)
-                        fb_id = publisher_agent.publish(poster_path, cap, post_id_db=db_id)
+                        db_id = publisher_agent.create_post_record(0, "", cap)
+                        fb_id = publisher_agent.publish(None, cap, post_id_db=db_id)
                         decision.record_post("TRANSFER_ALERT", art_id, "default", fb_id)
                         processed += 1
+                        logger.info("Transfer text post published: %s", fb_id)
                     except Exception as e:
                         logger.error("Transfer post failed: %s", e)
                 continue
@@ -152,14 +145,17 @@ def scan_for_news():
                 logger.info("Injury article detected: %s", title[:80])
                 if decision.should_post("INJURY_ALERT", "default", dedup_key=art_id):
                     try:
-                        poster_path = poster.create_football_fact(
-                            title[:120], category="INJURY UPDATE", emoji="🚑"
+                        cap = (
+                            f"INJURY NEWS\n\n"
+                            f"{title}\n\n"
+                            f"Stay tuned to Football Pulse for the latest updates.\n\n"
+                            f"#InjuryNews #Football #FootballPulse"
                         )
-                        cap = f"INJURY NEWS\n\n{title}\n\nStay tuned for updates.\n\n#InjuryNews #Football #FootballPulse"
-                        db_id = publisher_agent.create_post_record(0, poster_path, cap)
-                        fb_id = publisher_agent.publish(poster_path, cap, post_id_db=db_id)
+                        db_id = publisher_agent.create_post_record(0, "", cap)
+                        fb_id = publisher_agent.publish(None, cap, post_id_db=db_id)
                         decision.record_post("INJURY_ALERT", art_id, "default", fb_id)
                         processed += 1
+                        logger.info("Injury text post published: %s", fb_id)
                     except Exception as e:
                         logger.error("Injury post failed: %s", e)
 
