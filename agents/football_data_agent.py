@@ -1,8 +1,17 @@
 """
 agents/football_data_agent.py — Football Pulse AI
 Collects football data from Football-Data.org, TheSportsDB, and RSS feeds.
+
+FIXES applied:
+  - get_todays_fixtures() now uses ONE global API call instead of 8 per-competition
+    calls. This stops the 429 rate-limit storm that burned all 10 req/min.
+  - Per-competition fallback only runs if the global call returns 0 results,
+    AND only for competitions not already seen, with a 7-second delay between each.
+  - get_live_matches() same pattern — global first, targeted fallback only if needed.
+  - Added _can_call_api() guard using a simple in-memory rate limit counter.
 """
 
+import time
 import json
 import feedparser
 from datetime import datetime, timezone
@@ -17,127 +26,173 @@ logger = setup_logger("data_agent")
 FD_BASE  = "https://api.football-data.org/v4"
 SDB_BASE = "https://www.thesportsdb.com/api/v1/json"
 
-# ── All competition codes we care about (football-data.org codes) ──────────
-# Free tier covers: PL, PD, BL1, SA, FL1, DED, PPL, CL, EC, WC
-WATCHED_COMPETITIONS = [
-    "WC",   # FIFA World Cup  ← this was missing entirely
-    "CL",   # UEFA Champions League
-    "PL",   # Premier League
-    "PD",   # La Liga
-    "BL1",  # Bundesliga
-    "SA",   # Serie A
-    "FL1",  # Ligue 1
-    "EC",   # European Championship
-]
+# Competitions on the free tier that we care about
+WATCHED_COMPETITIONS = ["WC", "CL", "PL", "PD", "BL1", "SA", "FL1", "EC"]
+
+# Simple in-process rate limiter: max 9 calls/minute (safe under the 10/min limit)
+_call_timestamps: list[float] = []
+_RATE_LIMIT     = 9     # calls
+_RATE_WINDOW    = 60.0  # seconds
 
 
 def _fd_headers() -> dict:
     return {"X-Auth-Token": settings.FOOTBALL_DATA_API_KEY}
 
 
+def _can_call_api() -> bool:
+    """
+    Return True if we are within the rate limit, False if we would exceed it.
+    Cleans up timestamps older than the window automatically.
+    """
+    now = time.time()
+    # Drop timestamps outside the window
+    while _call_timestamps and now - _call_timestamps[0] > _RATE_WINDOW:
+        _call_timestamps.pop(0)
+
+    if len(_call_timestamps) >= _RATE_LIMIT:
+        logger.warning(
+            "Rate limit guard: %d calls made in last 60 s — skipping API call",
+            len(_call_timestamps),
+        )
+        return False
+    return True
+
+
+def _tracked_get(url: str, params: dict = None) -> Optional[dict]:
+    """
+    Wrapper around get_json that records the call timestamp for rate limiting.
+    Returns None if rate limit reached.
+    """
+    if not _can_call_api():
+        return None
+    _call_timestamps.append(time.time())
+    return get_json(url, params=params, headers=_fd_headers())
+
+
 def get_live_matches() -> list[dict]:
     """
     Return matches currently in progress.
-    Queries each watched competition separately because the free tier
-    /matches?status=IN_PLAY endpoint often misses tournaments like the World Cup.
+
+    Strategy (saves API calls):
+      1. ONE global /matches?status=IN_PLAY call — covers all competitions.
+      2. Only if that returns 0 results, try the World Cup specifically
+         (WC is sometimes missed by the global endpoint).
+      3. No other per-competition calls during live polling.
     """
     all_matches = []
 
-    # First try the global endpoint
-    data = get_json(f"{FD_BASE}/matches", params={"status": "IN_PLAY"}, headers=_fd_headers())
+    # ── Step 1: Global call ───────────────────────────────────
+    data = _tracked_get(f"{FD_BASE}/matches", params={"status": "IN_PLAY"})
     if data:
         all_matches.extend(data.get("matches", []))
 
-    # Then explicitly poll each key competition so World Cup is never missed
-    seen_ids = {str(m.get("id")) for m in all_matches}
-    for code in WATCHED_COMPETITIONS:
-        try:
-            comp_data = get_json(
-                f"{FD_BASE}/competitions/{code}/matches",
-                params={"status": "IN_PLAY"},
-                headers=_fd_headers(),
-            )
-            if comp_data:
-                for m in comp_data.get("matches", []):
-                    mid = str(m.get("id"))
-                    if mid not in seen_ids:
-                        all_matches.append(m)
-                        seen_ids.add(mid)
-        except Exception as e:
-            logger.warning("Live match fetch failed for %s: %s", code, e)
-
     logger.info("Live matches fetched: %d", len(all_matches))
+
+    # ── Step 2: World Cup targeted fallback (only if nothing live) ──
+    if not all_matches:
+        if _can_call_api():
+            time.sleep(7)   # Respect rate limit before second call
+            wc_data = _tracked_get(
+                f"{FD_BASE}/competitions/WC/matches",
+                params={"status": "IN_PLAY"},
+            )
+            if wc_data:
+                all_matches.extend(wc_data.get("matches", []))
+                logger.info("WC live matches fetched: %d", len(all_matches))
+
     return all_matches
 
 
 def get_todays_fixtures() -> list[dict]:
-    """Return today's scheduled matches across all watched competitions."""
+    """
+    Return today's scheduled matches.
+
+    Strategy (saves API calls):
+      1. ONE global /matches?dateFrom=today&dateTo=today call.
+         This returns ALL competitions in a single request.
+      2. Only if the global call returns 0 (e.g. during the World Cup
+         when some comps are unlisted), attempt WC-specific call only.
+      3. No loop over all 8 competitions — that was causing all 429 errors.
+    """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     all_fixtures = []
-    seen_ids = set()
+    seen_ids: set[str] = set()
 
-    # Global endpoint first
-    data = get_json(
+    # ── Step 1: One global call ───────────────────────────────
+    data = _tracked_get(
         f"{FD_BASE}/matches",
         params={"dateFrom": today, "dateTo": today},
-        headers=_fd_headers(),
     )
     if data:
         for m in data.get("matches", []):
-            mid = str(m.get("id"))
+            mid = str(m.get("id", ""))
             if mid not in seen_ids:
                 all_fixtures.append(m)
                 seen_ids.add(mid)
 
-    # Then per-competition so World Cup fixtures always appear
-    for code in WATCHED_COMPETITIONS:
-        try:
-            comp_data = get_json(
-                f"{FD_BASE}/competitions/{code}/matches",
-                params={"dateFrom": today, "dateTo": today},
-                headers=_fd_headers(),
-            )
-            if comp_data:
-                for m in comp_data.get("matches", []):
-                    mid = str(m.get("id"))
-                    if mid not in seen_ids:
-                        all_fixtures.append(m)
-                        seen_ids.add(mid)
-        except Exception as e:
-            logger.warning("Fixture fetch failed for %s: %s", code, e)
-
     logger.info("Today's fixtures fetched: %d", len(all_fixtures))
+
+    # ── Step 2: WC fallback only ──────────────────────────────
+    # The World Cup is sometimes excluded from the global endpoint
+    # during the tournament. One targeted call is enough.
+    if not all_fixtures and _can_call_api():
+        time.sleep(7)
+        wc_data = _tracked_get(
+            f"{FD_BASE}/competitions/WC/matches",
+            params={"dateFrom": today, "dateTo": today},
+        )
+        if wc_data:
+            for m in wc_data.get("matches", []):
+                mid = str(m.get("id", ""))
+                if mid not in seen_ids:
+                    all_fixtures.append(m)
+                    seen_ids.add(mid)
+            logger.info(
+                "WC fixtures added: %d (total: %d)",
+                len(wc_data.get("matches", [])), len(all_fixtures),
+            )
+
     return all_fixtures
 
 
 def get_standings(competition_code: str) -> Optional[dict]:
-    data = get_json(
+    if not _can_call_api():
+        return None
+    time.sleep(7)
+    _call_timestamps.append(time.time())
+    return get_json(
         f"{FD_BASE}/competitions/{competition_code}/standings",
-        headers=_fd_headers()
+        headers=_fd_headers(),
     )
-    return data
 
 
 def get_top_scorers(competition_code: str, season: int = None) -> list[dict]:
+    if not _can_call_api():
+        return []
     params = {}
     if season:
         params["season"] = season
+    time.sleep(7)
+    _call_timestamps.append(time.time())
     data = get_json(
         f"{FD_BASE}/competitions/{competition_code}/scorers",
         params=params,
-        headers=_fd_headers()
+        headers=_fd_headers(),
     )
-    if not data:
-        return []
-    return data.get("scorers", [])
+    return data.get("scorers", []) if data else []
 
 
 def get_match_detail(match_id: int) -> Optional[dict]:
+    if not _can_call_api():
+        return None
+    _call_timestamps.append(time.time())
     return get_json(f"{FD_BASE}/matches/{match_id}", headers=_fd_headers())
 
 
+# ── TheSportsDB helpers (no rate limit concern — free & generous) ──
+
 def _sdb(endpoint: str, params: dict = None):
-    key = settings.THESPORTSDB_API_KEY
+    key = getattr(settings, "THESPORTSDB_API_KEY", "3")
     url = f"{SDB_BASE}/{key}/{endpoint}"
     return get_json(url, params=params)
 
@@ -151,37 +206,20 @@ def get_team_info(team_name: str) -> Optional[dict]:
 
 def get_team_logo_url(team_name: str) -> Optional[str]:
     info = get_team_info(team_name)
-    if info:
-        return info.get("strTeamBadge")
-    return None
+    return info.get("strTeamBadge") if info else None
 
 
 def get_player_photo_url(player_name: str) -> Optional[str]:
     data = _sdb("searchplayers.php", {"p": player_name})
     if data and data.get("player"):
-        return data["player"][0].get("strThumb") or data["player"][0].get("strCutout")
+        p = data["player"][0]
+        return p.get("strThumb") or p.get("strCutout")
     return None
-
-
-def get_last_5_matches(team_id: str) -> list[dict]:
-    data = _sdb(f"eventslast5.php?id={team_id}")
-    if not data:
-        return []
-    return data.get("results", [])
-
-
-def get_next_5_matches(team_id: str) -> list[dict]:
-    data = _sdb(f"eventsnext5.php?id={team_id}")
-    if not data:
-        return []
-    return data.get("events", [])
 
 
 def get_historical_fact_by_date(month: int, day: int) -> list[dict]:
     data = _sdb(f"eventsonthisday.php?month={month}&day={day}&l=Soccer")
-    if not data:
-        return []
-    return data.get("events", [])
+    return data.get("events", []) if data else []
 
 
 def fetch_rss_news(max_items: int = 10) -> list[dict]:
@@ -203,13 +241,15 @@ def fetch_rss_news(max_items: int = 10) -> list[dict]:
     return articles
 
 
+# ── Normalisers ───────────────────────────────────────────────
+
 def normalise_match(raw: dict) -> dict:
     competition = raw.get("competition", {})
-    home = raw.get("homeTeam", {})
-    away = raw.get("awayTeam", {})
+    home  = raw.get("homeTeam", {})
+    away  = raw.get("awayTeam", {})
     score = raw.get("score", {})
-    full = score.get("fullTime", {})
-    half = score.get("halfTime", {})
+    full  = score.get("fullTime", {})
+    half  = score.get("halfTime", {})
 
     return {
         "match_id":    str(raw.get("id", "")),
