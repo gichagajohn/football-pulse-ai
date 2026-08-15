@@ -60,11 +60,11 @@ CREATE TABLE IF NOT EXISTS engagement (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     post_id     INTEGER NOT NULL,
     fb_post_id  TEXT,
+    platform    TEXT    DEFAULT 'facebook',
     likes       INTEGER DEFAULT 0,
     comments    INTEGER DEFAULT 0,
     shares      INTEGER DEFAULT 0,
-    reach       INTEGER DEFAULT 0,
-    checked_at  DATETIME DEFAULT (datetime('now')),
+    fetched_at  DATETIME DEFAULT (datetime('now')),
     FOREIGN KEY (post_id) REFERENCES posts(id)
 );
 """
@@ -88,6 +88,12 @@ POSTS_COLUMNS = {
     "shares":        "INTEGER DEFAULT 0",
     "posted_at":     "DATETIME DEFAULT (datetime('now'))",
     "published_at":  "DATETIME",
+}
+
+# Columns engagement table must have
+ENGAGEMENT_COLUMNS = {
+    "platform":   "TEXT DEFAULT 'facebook'",
+    "fetched_at": "DATETIME DEFAULT (datetime('now'))",
 }
 
 
@@ -189,10 +195,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
             logger.info("Migration: added column posts.%s", col)
 
 
+def _migrate_engagement(conn: sqlite3.Connection) -> None:
+    """Add any missing columns to engagement table — safe to run every startup."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(engagement)").fetchall()}
+    for col, definition in ENGAGEMENT_COLUMNS.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE engagement ADD COLUMN {col} {definition}")
+            logger.info("Migration: added column engagement.%s", col)
+
+
 def init_db() -> None:
     """Create tables, fix schema issues, migrate missing columns."""
     with get_connection() as conn:
         conn.executescript(DDL)
         _rebuild_posts_if_needed(conn)
         _migrate(conn)
+        _migrate_engagement(conn)
     logger.info("Database initialised at %s", DB_PATH)
