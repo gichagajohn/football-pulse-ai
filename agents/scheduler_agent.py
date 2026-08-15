@@ -7,12 +7,14 @@ detection works correctly across GitHub Actions runs.
 
 import random
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from utils.logger import setup_logger
 from database.schema import get_connection, init_db
 
 log = setup_logger("scheduler_agent")
+
+EAT = timezone(timedelta(hours=3))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,6 +159,18 @@ def check_live_matches() -> None:
 # Fixtures — text-only
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _format_kickoff_eat(utc_date_str: str) -> str:
+    """Convert an ISO8601 UTC kickoff time to HH:MM EAT (UTC+3)."""
+    if not utc_date_str or utc_date_str == "TBC":
+        return "TBC"
+    try:
+        dt = datetime.fromisoformat(utc_date_str.replace("Z", "+00:00"))
+        eat = dt.astimezone(EAT)
+        return eat.strftime("%H:%M EAT")
+    except Exception:
+        return utc_date_str[:16].replace("T", " ") + " UTC"
+
+
 def post_todays_fixtures() -> None:
     try:
         from agents.football_data_agent import get_todays_fixtures
@@ -169,7 +183,7 @@ def post_todays_fixtures() -> None:
             log.info("No fixtures today.")
             return
 
-        today     = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today     = datetime.now(EAT).strftime("%Y-%m-%d")
         dedup_key = f"fixtures:{today}"
 
         if is_duplicate("FIXTURE_POST", dedup_key):
@@ -185,7 +199,7 @@ def post_todays_fixtures() -> None:
             comp = f.get("competition", {}).get("name", "Football")
             home = f.get("homeTeam", {}).get("name", "")
             away = f.get("awayTeam", {}).get("name", "")
-            kt   = f.get("utcDate", "TBC")[:16].replace("T", " ") + " UTC"
+            kt   = _format_kickoff_eat(f.get("utcDate", "TBC"))
             by_comp.setdefault(comp, []).append(f"{home} vs {away}  |  {kt}")
 
         lines = [f"MATCHDAY - {today}\n"]
@@ -209,7 +223,7 @@ def post_todays_fixtures() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Football fact — text-only
+# Football fact — text-only, once per day
 # ─────────────────────────────────────────────────────────────────────────────
 
 FOOTBALL_FACTS = [
@@ -242,27 +256,23 @@ def post_football_fact() -> None:
         from agents import publisher_agent
         from agents.content_decision_agent import should_post, record_post, is_duplicate
 
-        chosen_fact = None
-        chosen_key  = None
-        for fact in random.sample(FOOTBALL_FACTS, len(FOOTBALL_FACTS)):
-            key = hashlib.md5(fact.encode()).hexdigest()[:12]
-            if not is_duplicate("FOOTBALL_FACT", key):
-                chosen_fact = fact
-                chosen_key  = key
-                break
+        today   = datetime.now(EAT).strftime("%Y-%m-%d")
+        day_key = f"fact:{today}"
 
-        if not chosen_fact:
-            chosen_fact = random.choice(FOOTBALL_FACTS)
-            chosen_key  = hashlib.md5(chosen_fact.encode()).hexdigest()[:12]
-
-        if not should_post("FOOTBALL_FACT", "default", dedup_key=chosen_key):
+        if is_duplicate("FOOTBALL_FACT", day_key):
+            log.info("Football fact already posted today.")
             return
+
+        if not should_post("FOOTBALL_FACT", "default", dedup_key=day_key):
+            return
+
+        chosen_fact = random.choice(FOOTBALL_FACTS)
 
         cap = caption_agent.generate_fact_caption(chosen_fact)
         db_id = publisher_agent.create_post_record(0, "", cap)
         fb_id = publisher_agent.publish(None, cap, post_id_db=db_id)
-        record_post("FOOTBALL_FACT", chosen_key, "default", fb_id)
-        log.info("Fact posted.")
+        record_post("FOOTBALL_FACT", day_key, "default", fb_id)
+        log.info("Fact posted: %s", chosen_fact[:50])
 
     except Exception as e:
         log.error("post_football_fact: %s", e)
@@ -292,7 +302,7 @@ def post_on_this_day() -> None:
         from agents import publisher_agent
         from agents.content_decision_agent import should_post, record_post, is_duplicate
 
-        today        = datetime.now(timezone.utc).strftime("%m-%d")
+        today        = datetime.now(EAT).strftime("%m-%d")
         events_today = [e for e in ON_THIS_DAY_EVENTS if e["date"] == today]
 
         if not events_today:
