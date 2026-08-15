@@ -1,34 +1,27 @@
 name: Football Pulse AI Bot
-
 on:
   schedule:
     - cron: '*/15 * * * *'
   workflow_dispatch:
-
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     permissions:
       contents: write   # needed to commit the DB back to the repo
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-
       - name: Install dependencies
         run: pip install -r requirements.txt
-
       - name: Install fonts
         run: sudo apt-get install -y fonts-dejavu-core
-
       - name: Create .env file
         run: |
           echo "FOOTBALL_DATA_API_KEY=${{ secrets.FOOTBALL_DATA_API_KEY }}" >> .env
@@ -39,22 +32,17 @@ jobs:
           echo "MAX_POSTS_PER_HOUR=8" >> .env
           echo "DEDUPE_WINDOW_HOURS=6" >> .env
           echo "TIMEZONE=Africa/Nairobi" >> .env
-
       - name: Run bot cycle
         run: python run_once.py
-
       - name: Save database state back to repo
         if: always()   # run even if the bot cycle had errors
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Only commit if the DB file actually changed
-          if git diff --quiet -- "*.db" "database/" 2>/dev/null || \
-             git ls-files --others --exclude-standard | grep -q "\.db$"; then
-            git add -f "*.db" || true
-            git add -f database/*.db || true
-            git diff --staged --quiet || git commit -m "chore: persist bot state [skip ci]"
-            git push
-          else
+          git add -f "*.db" database/*.db 2>/dev/null || true
+          if git diff --staged --quiet; then
             echo "No DB changes to commit"
+          else
+            git commit -m "chore: persist bot state [skip ci]"
+            git push
           fi
