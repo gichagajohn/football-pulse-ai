@@ -55,6 +55,18 @@ CREATE TABLE IF NOT EXISTS match_state (
     status      TEXT    NOT NULL DEFAULT 'NS',
     updated_at  DATETIME DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS engagement (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id     INTEGER NOT NULL,
+    fb_post_id  TEXT,
+    likes       INTEGER DEFAULT 0,
+    comments    INTEGER DEFAULT 0,
+    shares      INTEGER DEFAULT 0,
+    reach       INTEGER DEFAULT 0,
+    checked_at  DATETIME DEFAULT (datetime('now')),
+    FOREIGN KEY (post_id) REFERENCES posts(id)
+);
 """
 
 # Columns posts table must have (all nullable — publisher_agent doesn't fill all of them)
