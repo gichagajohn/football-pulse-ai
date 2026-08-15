@@ -1,14 +1,6 @@
 """
 agents/football_data_agent.py — Football Pulse AI
 Collects football data from Football-Data.org, TheSportsDB, and RSS feeds.
-
-FIXES applied:
-  - get_todays_fixtures() now uses ONE global API call instead of 8 per-competition
-    calls. This stops the 429 rate-limit storm that burned all 10 req/min.
-  - Per-competition fallback only runs if the global call returns 0 results,
-    AND only for competitions not already seen, with a 7-second delay between each.
-  - get_live_matches() same pattern — global first, targeted fallback only if needed.
-  - Added _can_call_api() guard using a simple in-memory rate limit counter.
 """
 
 import time
@@ -26,13 +18,13 @@ logger = setup_logger("data_agent")
 FD_BASE  = "https://api.football-data.org/v4"
 SDB_BASE = "https://www.thesportsdb.com/api/v1/json"
 
-# Competitions on the free tier that we care about
-WATCHED_COMPETITIONS = ["WC", "CL", "PL", "PD", "BL1", "SA", "FL1", "EC"]
+# All competitions on the free tier — used for fixture fetching
+WATCHED_COMPETITIONS = ["WC", "CL", "PL", "PD", "BL1", "SA", "FL1", "EC", "ELC", "DED", "PPL", "BSA"]
 
 # Simple in-process rate limiter: max 9 calls/minute (safe under the 10/min limit)
 _call_timestamps: list[float] = []
-_RATE_LIMIT     = 9     # calls
-_RATE_WINDOW    = 60.0  # seconds
+_RATE_LIMIT     = 9
+_RATE_WINDOW    = 60.0
 
 
 def _fd_headers() -> dict:
@@ -40,15 +32,9 @@ def _fd_headers() -> dict:
 
 
 def _can_call_api() -> bool:
-    """
-    Return True if we are within the rate limit, False if we would exceed it.
-    Cleans up timestamps older than the window automatically.
-    """
     now = time.time()
-    # Drop timestamps outside the window
     while _call_timestamps and now - _call_timestamps[0] > _RATE_WINDOW:
         _call_timestamps.pop(0)
-
     if len(_call_timestamps) >= _RATE_LIMIT:
         logger.warning(
             "Rate limit guard: %d calls made in last 60 s — skipping API call",
@@ -59,10 +45,6 @@ def _can_call_api() -> bool:
 
 
 def _tracked_get(url: str, params: dict = None) -> Optional[dict]:
-    """
-    Wrapper around get_json that records the call timestamp for rate limiting.
-    Returns None if rate limit reached.
-    """
     if not _can_call_api():
         return None
     _call_timestamps.append(time.time())
@@ -72,53 +54,42 @@ def _tracked_get(url: str, params: dict = None) -> Optional[dict]:
 def get_live_matches() -> list[dict]:
     """
     Return matches currently in progress.
-
-    Strategy (saves API calls):
-      1. ONE global /matches?status=IN_PLAY call — covers all competitions.
-      2. Only if that returns 0 results, try the World Cup specifically
-         (WC is sometimes missed by the global endpoint).
-      3. No other per-competition calls during live polling.
+    Uses one global call first, then WC fallback if nothing found.
     """
     all_matches = []
 
-    # ── Step 1: Global call ───────────────────────────────────
     data = _tracked_get(f"{FD_BASE}/matches", params={"status": "IN_PLAY"})
     if data:
         all_matches.extend(data.get("matches", []))
 
     logger.info("Live matches fetched: %d", len(all_matches))
 
-    # ── Step 2: World Cup targeted fallback (only if nothing live) ──
-    if not all_matches:
-        if _can_call_api():
-            time.sleep(7)   # Respect rate limit before second call
-            wc_data = _tracked_get(
-                f"{FD_BASE}/competitions/WC/matches",
-                params={"status": "IN_PLAY"},
-            )
-            if wc_data:
-                all_matches.extend(wc_data.get("matches", []))
-                logger.info("WC live matches fetched: %d", len(all_matches))
+    if not all_matches and _can_call_api():
+        time.sleep(7)
+        wc_data = _tracked_get(
+            f"{FD_BASE}/competitions/WC/matches",
+            params={"status": "IN_PLAY"},
+        )
+        if wc_data:
+            all_matches.extend(wc_data.get("matches", []))
+            logger.info("WC live matches fetched: %d", len(all_matches))
 
     return all_matches
 
 
 def get_todays_fixtures() -> list[dict]:
     """
-    Return today's scheduled matches.
+    Return today's scheduled matches by querying each competition individually.
 
-    Strategy (saves API calls):
-      1. ONE global /matches?dateFrom=today&dateTo=today call.
-         This returns ALL competitions in a single request.
-      2. Only if the global call returns 0 (e.g. during the World Cup
-         when some comps are unlisted), attempt WC-specific call only.
-      3. No loop over all 8 competitions — that was causing all 429 errors.
+    The global /matches endpoint misses competitions sometimes, so we query
+    each competition separately with a short delay between calls to stay
+    within the 10 req/min rate limit.
     """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     all_fixtures = []
     seen_ids: set[str] = set()
 
-    # ── Step 1: One global call ───────────────────────────────
+    # Step 1: Try the global call first (free, fast)
     data = _tracked_get(
         f"{FD_BASE}/matches",
         params={"dateFrom": today, "dateTo": today},
@@ -130,28 +101,41 @@ def get_todays_fixtures() -> list[dict]:
                 all_fixtures.append(m)
                 seen_ids.add(mid)
 
-    logger.info("Today's fixtures fetched: %d", len(all_fixtures))
+    logger.info("Global fixtures fetched: %d", len(all_fixtures))
 
-    # ── Step 2: WC fallback only ──────────────────────────────
-    # The World Cup is sometimes excluded from the global endpoint
-    # during the tournament. One targeted call is enough.
-    if not all_fixtures and _can_call_api():
-        time.sleep(7)
-        wc_data = _tracked_get(
-            f"{FD_BASE}/competitions/WC/matches",
-            params={"dateFrom": today, "dateTo": today},
-        )
-        if wc_data:
-            for m in wc_data.get("matches", []):
+    # Step 2: Query each competition individually to catch any missed ones
+    # Use a 7-second delay between calls to stay under rate limit
+    for comp_code in WATCHED_COMPETITIONS:
+        if not _can_call_api():
+            logger.warning("Rate limit reached during fixture fetch — stopping at %d fixtures", len(all_fixtures))
+            break
+
+        time.sleep(7)  # Stay safely under 10 req/min
+
+        try:
+            comp_data = _tracked_get(
+                f"{FD_BASE}/competitions/{comp_code}/matches",
+                params={"dateFrom": today, "dateTo": today, "status": "SCHEDULED"},
+            )
+            if not comp_data:
+                continue
+
+            new_count = 0
+            for m in comp_data.get("matches", []):
                 mid = str(m.get("id", ""))
                 if mid not in seen_ids:
                     all_fixtures.append(m)
                     seen_ids.add(mid)
-            logger.info(
-                "WC fixtures added: %d (total: %d)",
-                len(wc_data.get("matches", [])), len(all_fixtures),
-            )
+                    new_count += 1
 
+            if new_count > 0:
+                logger.info("  %s: +%d fixtures", comp_code, new_count)
+
+        except Exception as e:
+            logger.warning("Fixture fetch failed for %s: %s", comp_code, e)
+            continue
+
+    logger.info("Today's fixtures fetched (total): %d", len(all_fixtures))
     return all_fixtures
 
 
@@ -189,7 +173,7 @@ def get_match_detail(match_id: int) -> Optional[dict]:
     return get_json(f"{FD_BASE}/matches/{match_id}", headers=_fd_headers())
 
 
-# ── TheSportsDB helpers (no rate limit concern — free & generous) ──
+# ── TheSportsDB helpers ───────────────────────────────────────────────────────
 
 def _sdb(endpoint: str, params: dict = None):
     key = getattr(settings, "THESPORTSDB_API_KEY", "3")
@@ -241,7 +225,7 @@ def fetch_rss_news(max_items: int = 10) -> list[dict]:
     return articles
 
 
-# ── Normalisers ───────────────────────────────────────────────
+# ── Normalisers ───────────────────────────────────────────────────────────────
 
 def normalise_match(raw: dict) -> dict:
     competition = raw.get("competition", {})
