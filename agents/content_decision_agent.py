@@ -100,6 +100,28 @@ def record_post(content_type: str, key: str, competition: Optional[str] = None,
         )
 
 
+def within_rate_limit(content_type: str = "INJURY_ALERT",
+                       max_per_window: int = 5,
+                       window_hours: int = 24) -> bool:
+    """
+    Return True if fewer than `max_per_window` posts of this content_type
+    have gone out in the last `window_hours`. Used to throttle noisy
+    sources like injury/transfer RSS feeds.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM posts WHERE content_type = ? AND posted_at >= ?",
+            (content_type, cutoff.isoformat()),
+        ).fetchone()
+    count = row["c"] if row else 0
+    ok = count < max_per_window
+    if not ok:
+        logger.info("within_rate_limit → BLOCKED %s count=%d >= max=%d",
+                     content_type, count, max_per_window)
+    return ok
+
+
 def should_post(event_type: str, competition: Optional[str] = None,
                 dedup_key: Optional[str] = None) -> bool:
     """
