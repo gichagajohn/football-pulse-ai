@@ -44,21 +44,35 @@ def fetch_post_insights(fb_post_id: str) -> Optional[dict]:
     if not full_id:
         return None
 
-    fields = "likes.summary(true),comments.summary(true),shares,reactions.summary(true)"
-    data = get_json(
+    # Core fields — these are reliable and never 400 on zero values.
+    core_data = get_json(
         f"{FB_GRAPH}/{full_id}",
         params={
-            "fields":       fields,
+            "fields":       "likes.summary(true),comments.summary(true),reactions.summary(true)",
             "access_token": settings.FB_PAGE_ACCESS_TOKEN,
         }
     )
-    if not data:
+    if not core_data:
         return None
 
+    # Shares is fetched separately — Graph API returns a 400 instead of
+    # shares:0 when a post has never been shared, so this call is expected
+    # to fail often. That failure must not take down likes/comments too.
+    shares_count = 0
+    shares_data = get_json(
+        f"{FB_GRAPH}/{full_id}",
+        params={
+            "fields":       "shares",
+            "access_token": settings.FB_PAGE_ACCESS_TOKEN,
+        }
+    )
+    if shares_data:
+        shares_count = shares_data.get("shares", {}).get("count", 0)
+
     return {
-        "likes":    data.get("reactions", {}).get("summary", {}).get("total_count", 0),
-        "comments": data.get("comments",  {}).get("summary", {}).get("total_count", 0),
-        "shares":   data.get("shares",    {}).get("count", 0),
+        "likes":    core_data.get("reactions", {}).get("summary", {}).get("total_count", 0),
+        "comments": core_data.get("comments",  {}).get("summary", {}).get("total_count", 0),
+        "shares":   shares_count,
     }
 
 
