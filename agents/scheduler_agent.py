@@ -137,6 +137,22 @@ def check_live_matches() -> None:
             if prev is None:
                 log.info("New match baseline: %s [%s] %s %d-%d",
                          mid, competition, status, home_score, away_score)
+
+                # If we've never seen this match before but it already has goals
+                # or is already finished (bot was offline, or match started between
+                # checks), still post it instead of silently skipping. should_post's
+                # dedup keys protect against reposting if it was already announced
+                # by an earlier bot run before match_state got reset.
+                if home_score + away_score > 0:
+                    log.info("First sighting already has goals — posting score: %s %d-%d",
+                             mid, home_score, away_score)
+                    _handle_goal(match, home_score, away_score)
+
+                if status in ("FINISHED", "FT"):
+                    log.info("First sighting already finished — posting result: %s %d-%d",
+                             mid, home_score, away_score)
+                    _handle_fulltime(match, home_score, away_score)
+
                 _save_state(mid, home_score, away_score, status)
                 continue
 
