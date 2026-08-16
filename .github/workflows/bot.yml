@@ -1,27 +1,43 @@
 name: Football Pulse AI Bot
+
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    # All times in UTC. EAT = UTC+3, so subtract 3 hours.
+    - cron: '0 5 * * *'    # 08:00 EAT — fixtures
+    - cron: '0 8 * * *'    # 11:00 EAT — transfer/injury news
+    - cron: '0 12 * * *'   # 15:00 EAT — transfer/injury news
+    - cron: '0 15 * * *'   # 18:00 EAT — transfer/injury news
+    - cron: '0 21 * * *'   # 00:00 EAT (midnight) — full-time results
   workflow_dispatch:
+    inputs:
+      job:
+        description: 'Job to run manually (fixtures / news / results / all)'
+        required: false
+        default: 'all'
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # needed to commit the DB back to the repo
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
+
       - name: Install dependencies
         run: pip install -r requirements.txt
+
       - name: Install fonts
         run: sudo apt-get install -y fonts-dejavu-core
+
       - name: Create .env file
         run: |
           echo "FOOTBALL_DATA_API_KEY=${{ secrets.FOOTBALL_DATA_API_KEY }}" >> .env
@@ -30,19 +46,17 @@ jobs:
           echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
           echo "MIN_PRIORITY_TO_POST=40" >> .env
           echo "MAX_POSTS_PER_HOUR=8" >> .env
-          echo "DEDUPE_WINDOW_HOURS=6" >> .env
+          echo "DEDUPE_WINDOW_HOURS=20" >> .env
           echo "TIMEZONE=Africa/Nairobi" >> .env
-      - name: Run bot cycle
+
+      - name: Run bot
         run: python run_once.py
+
       - name: Save database state back to repo
-        if: always()   # run even if the bot cycle had errors
+        if: always()
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f "*.db" database/*.db 2>/dev/null || true
-          if git diff --staged --quiet; then
-            echo "No DB changes to commit"
-          else
-            git commit -m "chore: persist bot state [skip ci]"
-            git push
-          fi
+          git add -f database/*.db 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: persist bot state [skip ci]"
+          git push || true
