@@ -38,41 +38,48 @@ _previous_scores: dict = {}
 # ─────────────────────────────────────────────────────────────────────────────
 
 def check_live_matches():
+    """Poll live games and persist score state so restarts do not miss goals."""
     try:
         matches = data_agent.get_live_matches()
     except Exception as e:
         logger.warning("Live match fetch failed: %s", e)
         return
 
-    logger.info("Live matches to process: %d", len(matches))
-
     for raw in matches:
         match = data_agent.normalise_match(raw)
-        mid    = match["match_id"]
-        home   = match["home_score"]
-        away   = match["away_score"]
-        status = match["status"]
-        comp   = match["competition"]
-
-        prev = _previous_scores.get(mid)
-
-        if prev is None:
-            logger.info("New match baseline: %s [%s] %s %d-%d",
-                        mid, comp, status, home, away)
-        else:
-            if home > prev[0] or away > prev[1]:
-                scoring_team = match["home_team"] if home > prev[0] else match["away_team"]
-                _handle_goal(match, scoring_team)
-
-            if prev[2] not in ("FINISHED", "FULL_TIME") and status in ("FINISHED", "FULL_TIME"):
+        mid, home, away = match["match_id"], match["home_score"], match["away_score"]
+        status, comp = match["status"], match["competition"]
+        with get_connection() as conn:
+            previous = conn.execute(
+                "SELECT home_score, away_score, status FROM match_state WHERE match_id=?",
+                (mid,),
+            ).fetchone()
+            if previous is None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO match_state(match_id,home_score,away_score,status,updated_at) VALUES(?,?,?,?,datetime('now'))",
+                    (mid, home, away, status),
+                )
+                continue
+            old_home, old_away, old_status = previous["home_score"], previous["away_score"], previous["status"]
+            score_changed = home > old_home or away > old_away
+            if score_changed:
+                scoring_team = match["home_team"] if home > old_home else match["away_team"]
+                goal_info = (match.get("goals") or [])[-1:] 
+                _handle_goal(match, scoring_team, goal_info[0] if goal_info else None)
+            if old_status not in ("FINISHED", "FULL_TIME") and status in ("FINISHED", "FULL_TIME"):
                 _handle_fulltime(match)
+            conn.execute(
+                "UPDATE match_state SET home_score=?, away_score=?, status=?, updated_at=datetime('now') WHERE match_id=?",
+                (home, away, status, mid),
+            )
 
-        _previous_scores[mid] = (home, away, status)
 
-
-def _handle_goal(match: dict, scoring_team: str):
+def _handle_goal(match: dict, scoring_team: str, goal_info: dict = None):
     mid    = match["match_id"]
     comp   = match["competition"]
+    scorer = ((goal_info or {}).get("scorer") or {}).get("name") or scoring_team
+    assist = ((goal_info or {}).get("assist") or {}).get("name")
+    is_penalty = ((goal_info or {}).get("type") or "").lower() == "penalty"
     home   = match["home_score"]
     away   = match["away_score"]
     minute = match.get("minute") or 0
@@ -92,12 +99,16 @@ def _handle_goal(match: dict, scoring_team: str):
             away_team  = match["away_team"],
             home_score = home,
             away_score = away,
-            scorer     = scoring_team,
+            scorer     = scorer,
             minute     = minute,
             competition= comp,
+            home_logo_url=data_agent.get_team_logo_url(match["home_team"]),
+            away_logo_url=data_agent.get_team_logo_url(match["away_team"]),
+            player_photo_url=data_agent.get_player_photo_url(scorer),
+            is_penalty=is_penalty,
         )
         cap = caption_agent.generate_goal_caption(
-            scorer     = scoring_team,
+            scorer     = scorer,
             team       = scoring_team,
             home_team  = match["home_team"],
             away_team  = match["away_team"],
