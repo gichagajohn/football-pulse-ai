@@ -1,0 +1,73 @@
+name: Football Pulse Live Goal Monitor
+
+on:
+  schedule:
+    # Run every five minutes.
+    # GitHub may occasionally delay scheduled jobs.
+    - cron: "2-59/5 * * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: football-live-monitor
+  cancel-in-progress: false
+
+jobs:
+  live-goals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Install fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-dejavu-core
+
+      - name: Create environment file
+        run: |
+          echo "FOOTBALL_DATA_API_KEY=${{ secrets.FOOTBALL_DATA_API_KEY }}" >> .env
+          echo "FB_PAGE_ACCESS_TOKEN=${{ secrets.FB_PAGE_ACCESS_TOKEN }}" >> .env
+          echo "FB_PAGE_ID=${{ secrets.FB_PAGE_ID }}" >> .env
+          echo "THESPORTSDB_API_KEY=${{ secrets.THESPORTSDB_API_KEY || '1' }}" >> .env
+          echo "TIMEZONE=Africa/Nairobi" >> .env
+          echo "DB_PATH=database/football_pulse.db" >> .env
+          echo "POSTER_DIR=output/posters" >> .env
+          echo "MIN_PRIORITY_TO_POST=40" >> .env
+          echo "MAX_POSTS_PER_HOUR=8" >> .env
+          echo "DEDUPE_WINDOW_HOURS=48" >> .env
+          echo "BOT_JOB=live" >> .env
+
+      - name: Check live matches and publish goal alerts
+        run: |
+          python run_once.py
+
+      - name: Save match state
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add database/*.db output/posters/ 2>/dev/null || true
+
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: save live football state [skip ci]"
+            git push
+          fi
