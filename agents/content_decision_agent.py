@@ -88,15 +88,17 @@ def is_duplicate(content_type: str, key: str) -> bool:
 
 
 def record_post(content_type: str, key: str, competition: Optional[str] = None,
-                fb_post_id: Optional[str] = None) -> None:
-    """Record a successful post so future duplicate checks work."""
+                fb_post_id: Optional[str] = None, caption: Optional[str] = None,
+                poster_path: Optional[str] = None) -> None:
+    """Record a post for deduplication and keep optional media metadata."""
     h = _make_hash(content_type, key)
     with get_connection() as conn:
         conn.execute(
             """INSERT OR IGNORE INTO posts
-               (content_hash, content_type, competition, fb_post_id)
-               VALUES (?, ?, ?, ?)""",
-            (h, content_type, competition, fb_post_id),
+               (content_hash, content_type, competition, fb_post_id,
+                caption_text, poster_path, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'published')""",
+            (h, content_type, competition, fb_post_id, caption, poster_path),
         )
 
 
