@@ -48,6 +48,7 @@ jobs:
           echo "MAX_POSTS_PER_HOUR=8" >> .env
           echo "DEDUPE_WINDOW_HOURS=20" >> .env
           echo "TIMEZONE=Africa/Nairobi" >> .env
+          echo "BOT_JOB=${{ github.event.inputs.job }}" >> .env
 
       - name: Run bot
         run: python run_once.py
