@@ -1,7 +1,6 @@
 """
 agents/publisher_agent.py — Football Pulse AI
-Publishes text posts to Facebook Page using the Meta Graph API.
-Image/poster publishing removed — posts text-only to the feed.
+Publishes photo + caption posts to Facebook Page using the Meta Graph API.
 """
 
 import os
@@ -21,57 +20,55 @@ FB_GRAPH = "https://graph.facebook.com/v19.0"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Facebook — text-only feed post
+# Facebook photo publishing
 # ─────────────────────────────────────────────────────────────────────────────
 
 def publish_to_facebook(
     caption: str,
     post_id_db: int = None,
-    image_path: Path = None,   # accepted but ignored — kept for call-site compatibility
+    image_path: Path = None,
 ) -> Optional[str]:
-    """
-    Post plain text to the Facebook Page feed.
-    Returns the FB post ID on success, None on failure.
-    """
+    """Publish a local image with its caption to the Facebook Page."""
     if not settings.FB_PAGE_ACCESS_TOKEN or not settings.FB_PAGE_ID:
-        logger.warning("Facebook credentials not configured. Skipping FB publish.")
+        logger.warning("Facebook credentials not configured. Skipping publish.")
         return None
-
-    # Last-resort sanity check — catches empty/truncated captions from any
-    # generator, not just caption_agent.py's own Gemini path.
-    if not caption or len(caption.strip()) < 40:
-        logger.error("Refusing to publish suspiciously short/empty caption: %r", caption)
-        _mark_failed(post_id_db, "Caption failed pre-publish validation (empty or too short)")
+    if not caption or len(caption.strip()) < 20:
+        _mark_failed(post_id_db, "Caption failed validation")
         return None
 
     import requests
-
     try:
-        resp = requests.post(
-            f"{FB_GRAPH}/{settings.FB_PAGE_ID}/feed",
-            data={
-                "message":      caption,
-                "access_token": settings.FB_PAGE_ACCESS_TOKEN,
-            },
-            timeout=60,
-        )
-        result = resp.json()
-        logger.info("Feed post result: %s", result)
+        if image_path and Path(image_path).is_file():
+            with open(image_path, "rb") as photo:
+                resp = requests.post(
+                    f"{FB_GRAPH}/{settings.FB_PAGE_ID}/photos",
+                    files={"source": (Path(image_path).name, photo, "image/jpeg")},
+                    data={
+                        "caption": caption,
+                        "published": "true",
+                        "access_token": settings.FB_PAGE_ACCESS_TOKEN,
+                    },
+                    timeout=90,
+                )
+        else:
+            logger.warning("No valid image path; using text fallback.")
+            resp = requests.post(
+                f"{FB_GRAPH}/{settings.FB_PAGE_ID}/feed",
+                data={"message": caption, "access_token": settings.FB_PAGE_ACCESS_TOKEN},
+                timeout=60,
+            )
 
-        if resp.status_code == 200 and "id" in result:
-            fb_post_id = result["id"]
-            logger.info("Facebook text post published: %s", fb_post_id)
+        result = resp.json()
+        if resp.ok and (result.get("id") or result.get("post_id")):
+            fb_post_id = result.get("post_id") or result.get("id")
             _mark_published(post_id_db, "facebook", fb_post_id=fb_post_id)
+            logger.info("Facebook post published: %s", fb_post_id)
             return fb_post_id
 
-        error = result.get("error", {})
-        logger.error(
-            "Feed post failed — code:%s type:%s message:%s",
-            error.get("code"), error.get("type"), error.get("message"),
-        )
+        error = result.get("error", result)
+        logger.error("Facebook publish failed: %s", error)
         _mark_failed(post_id_db, str(error))
         return None
-
     except Exception as e:
         logger.exception("Facebook publish exception: %s", e)
         _mark_failed(post_id_db, str(e))
@@ -107,7 +104,11 @@ def publish(
 
     fb_post_id = None
     if "facebook" in platforms:
-        fb_post_id = publish_to_facebook(caption, post_id_db=post_id_db)
+        fb_post_id = publish_to_facebook(
+            caption,
+            post_id_db=post_id_db,
+            image_path=image_path,
+        )
 
     # Instagram skipped — needs an image
     if "instagram" in platforms:
