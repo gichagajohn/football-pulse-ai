@@ -89,7 +89,7 @@ def _handle_goal(match: dict, scoring_team: str, goal_info: dict = None):
     if decision_agent.is_duplicate(event_id, "GOAL"):
         return
 
-    should, priority = decision_agent.should_post("GOAL", comp)
+    should = decision_agent.should_post("GOAL", comp)
     if not should or not decision_agent.within_rate_limit():
         return
 
@@ -133,7 +133,7 @@ def _handle_fulltime(match: dict):
     if decision_agent.is_duplicate(mid, "FULLTIME"):
         return
 
-    should, priority = decision_agent.should_post("FULLTIME", comp)
+    should = decision_agent.should_post("FULLTIME", comp)
     if not should or not decision_agent.within_rate_limit():
         return
 
