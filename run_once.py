@@ -1,109 +1,148 @@
 #!/usr/bin/env python3
+
 """
 run_once.py — Football Pulse AI
-Runs the correct job based on current EAT time.
 
-Schedule (EAT = UTC+3):
-  08:00  →  fixtures job   (post today's upcoming matches)
-  11:00  →  news job       (transfer & injury news)
-  15:00  →  news job       (transfer & injury news)
-  18:00  →  news job       (transfer & injury news)
-  00:00  →  results job    (full-time results from today)
+Runs one scheduled job for GitHub Actions.
 
-When triggered manually via workflow_dispatch with job=all, runs everything.
+Supported jobs:
+    live
+    fixtures
+    news
+    results
+    all
 """
 
-import sys
 import os
+import sys
 from datetime import datetime
+
 import pytz
 
+# Ensure the repository root is available on the Python path.
 sys.path.insert(0, os.path.dirname(__file__))
 
 from database.schema import init_db
 from utils.logger import setup_logger
+
 
 log = setup_logger("run_once")
 
 EAT = pytz.timezone("Africa/Nairobi")
 
 
-def _current_eat_hour() -> int:
-    return datetime.now(EAT).hour
+def job_live():
+    """
+    Poll live matches once and publish any newly detected goal alerts.
+    """
+    log.info("=== JOB: LIVE GOAL MONITOR ===")
+
+    from agents.scheduler_agent import check_live_matches
+
+    check_live_matches()
 
 
 def job_fixtures():
-    """8:00 AM EAT — post today's fixtures."""
+    """
+    Post today's fixtures.
+    """
     log.info("=== JOB: TODAY'S FIXTURES ===")
-    try:
-        from agents.scheduler_agent import post_todays_fixtures
-        post_todays_fixtures()
-    except Exception as e:
-        log.error("Fixtures job failed: %s", e)
+
+    from agents.scheduler_agent import post_todays_fixtures
+
+    post_todays_fixtures()
 
 
 def job_news():
-    """11:00 AM / 3:00 PM / 6:00 PM EAT — transfer & injury news."""
-    log.info("=== JOB: TRANSFER & INJURY NEWS ===")
-    try:
-        from agents.injury_transfer_agent import scan_for_news
-        scan_for_news()
-    except Exception as e:
-        log.error("News job failed: %s", e)
+    """
+    Scan and publish transfer or injury news.
+    """
+    log.info("=== JOB: TRANSFER AND INJURY NEWS ===")
+
+    from agents.injury_transfer_agent import scan_for_news
+
+    scan_for_news()
 
 
 def job_results():
-    """Midnight EAT — post full-time results from today."""
+    """
+    Post today's full-time results summary.
+    """
     log.info("=== JOB: TODAY'S RESULTS ===")
-    try:
-        from agents.scheduler_agent import post_todays_results
-        post_todays_results()
-    except Exception as e:
-        log.error("Results job failed: %s", e)
+
+    from agents.scheduler_agent import post_todays_results
+
+    post_todays_results()
 
 
 def job_all():
-    """Manual trigger — run everything."""
-    log.info("=== JOB: ALL (manual trigger) ===")
+    """
+    Run the normal daily content jobs.
+    """
+    log.info("=== JOB: ALL DAILY TASKS ===")
+
     job_fixtures()
     job_news()
     job_results()
 
 
+def automatic_job():
+    """
+    Select a job based on the current time in Nairobi.
+
+    This is used when BOT_JOB is not provided.
+    """
+    hour = datetime.now(EAT).hour
+
+    log.info("Current Nairobi time hour: %s", hour)
+
+    if hour == 8:
+        job_fixtures()
+
+    elif hour in (11, 15, 18):
+        job_news()
+
+    elif hour == 0:
+        job_results()
+
+    else:
+        # Outside the normal daily schedule, use the cycle for
+        # live-score and goal monitoring.
+        job_live()
+
+
 def main():
     log.info("=== Football Pulse AI starting ===")
+
+    # Make sure all tables exist before any job runs.
     init_db()
 
-    # Check if a specific job was requested via environment variable
-    # (set by workflow_dispatch input)
     forced_job = os.getenv("BOT_JOB", "").strip().lower()
 
-    if forced_job == "fixtures":
-        job_fixtures()
-    elif forced_job == "news":
-        job_news()
-    elif forced_job == "results":
-        job_results()
-    elif forced_job == "all":
-        job_all()
-    else:
-        # Auto-detect based on current EAT hour
-        hour = _current_eat_hour()
-        log.info("Current EAT hour: %d", hour)
+    try:
+        if forced_job == "live":
+            job_live()
 
-        if hour == 8:
+        elif forced_job == "fixtures":
             job_fixtures()
-        elif hour in (11, 15, 18):
-            job_news()
-        elif hour == 0:
-            job_results()
-        else:
-            # Fallback: shouldn't happen with the cron schedule,
-            # but run news as a safe default
-            log.info("Hour %d not mapped to a specific job — running news as fallback.", hour)
+
+        elif forced_job == "news":
             job_news()
 
-    log.info("=== Cycle complete ===")
+        elif forced_job == "results":
+            job_results()
+
+        elif forced_job == "all":
+            job_all()
+
+        else:
+            automatic_job()
+
+    except Exception:
+        log.exception("Football Pulse job failed")
+        raise
+
+    log.info("=== Football Pulse job complete ===")
 
 
 if __name__ == "__main__":
