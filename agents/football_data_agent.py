@@ -247,6 +247,7 @@ def normalise_match(raw: dict) -> dict:
         "utc_date":    raw.get("utcDate", ""),
         "venue":       raw.get("venue", ""),
         "referees":    raw.get("referees", []),
+        "goals":       raw.get("goals", []),
         "raw":         json.dumps(raw),
     }
 
